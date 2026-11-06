@@ -1,4 +1,13 @@
-# Not needed at runtime; keeps the published bundle small.
+# Left out of the ClawHub bundle (kept in the repository). ClawHub never publishes hidden
+# paths (.git/, .github/, .gitignore, this file, .fcskill/ caches), so they need no entry here.
+# Development only:
 tests/
-.fcskill/
 pyproject.toml
+docs/ARCHITECTURE.md
+# Human/project documentation; the agent reads SKILL.md and docs/OPERATIONS.md:
+README.md
+CHANGELOG.md
+# ClawHub licenses every skill MIT-0 itself and takes its metadata from SKILL.md:
+LICENSE
+skill.json
+skill-card.md

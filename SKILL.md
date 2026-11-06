@@ -157,7 +157,9 @@ When something is wrong, `warnings` appears, e.g.
 | `render` | Shaded PNG views for a visual check | `filename*` `views` (default iso, front, top, right) `size` |
 
 `rotation` is `{"axis": [x, y, z], "angle": deg}`. Full details are in `describe <op>` or
-[docs/OPERATIONS.md](docs/OPERATIONS.md).
+[docs/OPERATIONS.md](docs/OPERATIONS.md). Complete, tested requests to start from are in `{baseDir}/examples/`:
+`pd_bracket.json` (PartDesign body, counterbored holes, fillet), `mounting_plate.json`, `gasket.json` (sketch
+profile with holes), `enclosure.json`, `flanged_bushing.json`, `l_bracket.json`, `wheel.json` and `table.json`.
 
 ### Profiles
 
