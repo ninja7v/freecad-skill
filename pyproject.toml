@@ -1,0 +1,22 @@
+# Tooling only: the skill itself is run as scripts, not installed as a package.
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"  # the launcher (scripts/fcskill.py) requires Python 3.12+
+# The engine runs inside FreeCAD's own Python: FreeCAD 1.1 builds exist for Python 3.10 to 3.14.
+per-file-target-version = { "scripts/fcengine/**" = "py310" }
+src = ["scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E501",  # line length is the formatter's job; it leaves long string literals intact
+    "B905",  # zip() pairs sequences of different lengths on purpose (e.g. DXF code/value lines)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/fcskill.py" = ["E402"]  # the Python version check must run before the other imports
+
+[tool.ruff.lint.isort]
+known-first-party = ["fcengine", "fcskill"]
+known-third-party = ["FreeCAD", "FreeCADGui", "Part", "Mesh", "Sketcher", "Materials", "Fem", "ObjectsFem", "Draft", "Import"]

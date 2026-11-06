@@ -1,0 +1,4 @@
+# Not needed at runtime; keeps the published bundle small.
+tests/
+.fcskill/
+pyproject.toml

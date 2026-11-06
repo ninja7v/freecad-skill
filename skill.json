@@ -1,6 +1,6 @@
 {
-  "name": "freecad",
-  "description": "Parametric CAD engine for FreeCAD using structured JSON operations",
-  "version": "1.0.0",
-  "entry_point": "python scripts/cad_engine.py"
+  "name": "freecad-skill",
+  "description": "Create, edit, inspect, verify and export parametric FreeCAD models from structured JSON",
+  "version": "2.0.0",
+  "entry_point": "python3 scripts/fcskill.py run"
 }

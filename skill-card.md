@@ -1,6 +1,7 @@
 ## Description:
 
-Create or modify 3D CAD models in FreeCAD using parametric JSON operations.
+Create, edit, inspect, verify and export parametric 3D CAD models in FreeCAD from structured JSON operations: parts,
+PartDesign bodies, assemblies, DXF drawings and linear stress analysis.
 
 This skill is ready for commercial/non-commercial use.
 
@@ -14,7 +15,7 @@ MIT-0
 
 ## Use Case:
 
-Developers and engineers use this skill to create, transform, inspect, and export FreeCAD CAD models through structured parametric operations.
+Developers and engineers use this skill to let AI agents build editable FreeCAD models (mechanical parts, enclosures, 3D-printable objects), change their dimensions later, check fits and strength, give parts materials, and export verified STEP/STL/3MF files and DXF drawings.
 
 ### Deployment Geography for Use:
 
@@ -22,26 +23,44 @@ Global
 
 ## Known Risks and Mitigations:
 
-Risk: The skill writes and may overwrite local CAD output files, including model.FCStd, model.step, or requested export filenames.
+Risk: The skill writes and may overwrite the requested FreeCAD document and export files.
 
-Mitigation: Run the skill in a dedicated project folder where generated CAD files can be safely created or replaced.
+Mitigation: All paths are confined to the workspace directory (no `..`, absolute paths or symlink escapes); a request that fails writes nothing; saves are atomic. Run it in a dedicated project folder.
+
+Risk: Generated geometry may not match the user's intent.
+
+Mitigation: Every step reports volumes and exact bounding boxes, and agents can assert expected dimensions; review models before manufacturing.
+
+Risk: Stress analysis (`fem_static`) results may be relied on for safety-critical parts.
+
+Mitigation: Every result is checked for equilibrium and mesh convergence and carries a disclaimer; it is a linear estimate, not a substitute for engineering review.
+
+Risk: Library parts are downloaded from GitHub and are licensed CC-BY 3.0.
+
+Mitigation: Only the official FreeCAD/FreeCAD-library repository is contacted; files are verified against its git hashes and size-capped; FCSKILL_OFFLINE=1 disables network access. Every imported part carries its attribution, which agents are told to pass on.
+
+Risk: The optional `python` op runs agent-written FreeCAD Python that is not confined to the workspace.
+
+Mitigation: It is disabled unless the user sets `FCSKILL_ALLOW_PYTHON=1`; the skill instructs agents never to set it themselves.
 
 ## Reference(s):
 
+- https://clawhub.ai/ninja7v/skills/freecad-skill
+- FreeCAD: https://www.freecad.org
 
 ## Skill Output:
 
 **Output Type(s):** [JSON, Shell commands, Files, Guidance]
 
-**Output Format:** [Structured JSON operation payloads, shell command invocations, and local CAD output files such as model.FCStd and model.step.]
+**Output Format:** [Structured JSON requests and responses, shell command invocations, and local CAD files (.FCStd, STEP, IGES, BREP, STL, OBJ, 3MF, DXF, SVG) and PNG previews.]
 
 **Output Parameters:** [1D]
 
-**Other Properties Related to Output:** [Runs through a local Python and FreeCAD engine and may create or overwrite CAD files in the working directory.]
+**Other Properties Related to Output:** [Runs locally through FreeCAD's headless interpreter (and the Gmsh and CalculiX tools bundled with FreeCAD for `fem_static`); network only for the optional FreeCAD parts library (github.com/FreeCAD/FreeCAD-library, verified downloads; FCSKILL_OFFLINE=1 disables it); writes only inside the workspace.]
 
 ## Skill Version(s):
 
-1.0.1 (source: server release metadata)
+2.0.0
 
 ## Ethical Considerations:
 
