@@ -1,7 +1,0 @@
-{
-  "operation": "export",
-  "parameters": {
-    "format": "stl",
-    "filename": "my_super_object.stl"
-  }
-}

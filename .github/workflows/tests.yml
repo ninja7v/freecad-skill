@@ -1,0 +1,58 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: ruff (lint and format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - name: Lint
+        run: ruff check --output-format=github .
+      - name: Format
+        run: ruff format --check --diff .
+
+  pure:
+    name: pure tests (no FreeCAD), Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13", "3.14"]  # the launcher requires Python 3.12+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python tests/run.py --pure -v
+
+  freecad:
+    name: FreeCAD ${{ matrix.freecad }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        freecad: ["1.1"]  # minimum supported version (see scripts/fcengine/compat.py)
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          activate-environment: fc
+      - name: Install FreeCAD
+        run: conda install -y "freecad=${{ matrix.freecad }}" "python>=3.12" calculix gmsh
+      - name: Doctor
+        run: python scripts/fcskill.py doctor
+      - name: Tests
+        run: python tests/run.py -v
