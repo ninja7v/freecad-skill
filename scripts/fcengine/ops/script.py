@@ -2,7 +2,13 @@
 
 Disabled unless the user sets FCSKILL_ALLOW_PYTHON=1. The code runs inside
 the request like any other step: the result is recomputed and verified, and
-on failure nothing is saved.
+on failure the document is not saved.
+
+This is NOT a sandbox: the code is ordinary Python with the permissions of
+the user's account (imports, files, processes, network). Only the document
+changes are rolled back; anything else the code does is not. Credential-like
+environment variables are removed from FreeCAD's environment beforehand (see
+hostenv), so the code cannot read them from os.environ.
 """
 
 from __future__ import annotations

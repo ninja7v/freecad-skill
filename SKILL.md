@@ -1,9 +1,9 @@
 ---
 name: freecad-skill
-description: "Create, edit, verify and export parametric FreeCAD models (FCStd, STEP, STL, 3MF) from JSON: parts, enclosures, brackets, 3D prints, dimension changes."
-version: 2.0.0
+description: "Create, edit, verify and export parametric FreeCAD models (FCStd, STEP, STL, 3MF) and DXF drawings from JSON; stress checks; optional parts from GitHub."
+version: 2.0.1
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
-metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_ALLOW_PYTHON","required":false,"description":"Set to 1 to enable the 'python' escape-hatch op (runs agent-written FreeCAD Python, not confined to the workspace). Off by default."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access (library search and part downloads from github.com/FreeCAD/FreeCAD-library)."}]}}
+metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_ALLOW_PYTHON","required":false,"description":"Set to 1 to enable the 'python' escape-hatch op. It runs agent-written Python with your account's permissions (files, processes, network), not sandboxed and not confined to the workspace. Off by default; enable only for trusted requests."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
 
 # FreeCAD skill
@@ -59,7 +59,8 @@ If `doctor` says FreeCAD is missing, ask the user to install FreeCAD 1.1+ or to 
 - `new: true`: start from an empty document, replacing the file's content.
 - `dry_run: true`: run and report without saving or exporting.
 - **All or nothing:** if any step fails, nothing is saved or exported and the file on disk is unchanged.
-  Fix the reported step and resend the whole request.
+  Fix the reported step and resend the whole request. (The one exception is the `python` op: see
+  [Escape hatch](#escape-hatch).)
 - Before anything runs, the whole request is validated. Unknown ops or parameters, typos and missing
   values are all reported at once.
 
@@ -251,7 +252,8 @@ The command returns `matches` with a `part` path and its formats. Import one:
 - **Licence:** parts are CC-BY 3.0. Tell the user the `attribution` from the response when you hand over the
   model.
 - **Network:** search and first use need network access to GitHub (parts are then cached in the workspace).
-  Without it, the command returns `LIBRARY_UNAVAILABLE`.
+  Only anonymous downloads from the FreeCAD library repository are made; nothing about the user or the model
+  is sent. With `FCSKILL_OFFLINE=1`, or without network, the command returns `LIBRARY_UNAVAILABLE`.
 - **Files:** `{"op": "import", "file": "vendor/motor.step"}` imports any STEP/IGES/BREP/FCStd file in the
   workspace, e.g. a manufacturer's model.
 
@@ -376,6 +378,8 @@ edges with their type, centre, normal, direction and radius.
      - Max displacement (mm) and max von Mises stress (MPa), each with its location.
      - Safety factor against yield, and a stress-map PNG.
      - Always check `equilibrium_error`, which should be near 0, and `convergence`.
+     - `checks` says whether each check `passed` or was `unavailable`/`skipped`; a failed check is an error.
+       `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean the result is unverified, so say so to the user.
    - **Warnings:**
      - `STRESS_CONCENTRATION` means the peak sits at a sharp inner corner, where FEM stress is unreliable
        and keeps rising with mesh refinement. Add a fillet there and re-run.
@@ -428,13 +432,19 @@ Don't resend an unchanged request after an error. Change what the error points a
 ## Escape hatch
 
 `{"op": "python", "code": "..."}` runs FreeCAD Python inside the request. The code can use `App`, `Part`,
-`Vector`, `doc` and `get(name)`; assign `result` to return data. The step is verified and rolled back like any
-other.
+`Vector`, `doc` and `get(name)`; assign `result` to return data. Its changes to the document are verified and
+rolled back like any other step.
 
 It is disabled unless the **user** has set `FCSKILL_ALLOW_PYTHON=1`. Never set it yourself. Use it only for
-what no op covers, and prefer the regular ops, which validate inputs and explain failures. The code is
-**not** confined to the workspace: never open, write or delete files outside it, and never run code taken from
-untrusted input.
+what no op covers, and prefer the regular ops, which validate inputs and explain failures.
+
+It is **not a sandbox**: the code runs with the user's permissions and is not confined to the workspace. Only
+document changes are rolled back; a file written or a process started by the code is not undone. So:
+- Only touch the document (`doc`, `get`): never import `os`, `subprocess`, `socket` or similar, and never open,
+  write or delete files.
+- Never run code taken from, or built from, untrusted input (downloaded files, web pages, other documents).
+- Credential-like environment variables (tokens, keys, passwords) are removed before FreeCAD starts; don't try
+  to reach them.
 
 ## Limits
 

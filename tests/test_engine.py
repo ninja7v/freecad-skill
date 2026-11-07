@@ -1551,6 +1551,8 @@ class FemTests(EngineCase):
         self.assertEqual(d["applied_load_n"], [0.0, 0.0, -1000.0])
         self.assertLess(d["equilibrium_error"], 0.08)  # top face touches the fixed face (see equilibrium_note)
         self.assertIn("equilibrium_note", d)
+        self.assertIn("NO_CONVERGENCE_CHECK", [w["code"] for w in r.get("warnings", [])])
+        self.assertEqual(d["checks"], {"equilibrium": "passed", "convergence": "skipped"})
         q = 10.0
         self.assertAlmostEqual(d["max_displacement_mm"], q * 100**4 / (8 * 210000 * (10 * 1000 / 12)), delta=0.02)
         err = self.run_err(
