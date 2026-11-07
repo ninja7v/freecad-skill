@@ -99,6 +99,10 @@ def _set_alias(ctx: Context, obj: Any, key: str, value: Any) -> bool:
         else:
             owner.Placement = App.Placement(pl.Base, App.Rotation(App.Vector(*value["axis"]), value["angle"]))
         return True
+    from .text import set_text
+
+    if set_text(ctx, obj, key, value):
+        return True
     if t in ("Part::Loft", "PartDesign::AdditiveLoft", "PartDesign::SubtractiveLoft") and key in (
         "sections",
         "ruled",

@@ -1,7 +1,8 @@
 ## Description:
 
 Create, edit, inspect, verify and export parametric 3D CAD models in FreeCAD from structured JSON operations: parts,
-PartDesign bodies, assemblies, DXF drawings and linear stress analysis.
+PartDesign bodies (including threaded holes), text, assemblies, DXF drawings and linear stress analysis. Closed
+meshes (STL, OBJ, 3MF) in the workspace can be imported as solids and modified.
 
 This skill is ready for commercial/non-commercial use.
 

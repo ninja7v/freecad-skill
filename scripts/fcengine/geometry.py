@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import FreeCAD as App
 
@@ -42,6 +42,24 @@ def bbox(shape: Any) -> Optional[Dict[str, List[float]]]:
     }
 
 
+_VALID: Dict[int, Tuple[Any, bool]] = {}
+
+
+def is_valid(shape: Any) -> bool:
+    """shape.isValid(), remembered per shape. The check takes seconds on large shapes (2-3 s for 20000 faces)
+    and one request asks it several times about the same result. The cached shape is kept alive, so a new shape
+    cannot reuse its identity, and isSame (same geometry and location) confirms the hit."""
+    key = shape.hashCode()
+    hit = _VALID.get(key)
+    if hit is not None and hit[0].isSame(shape):
+        return hit[1]
+    valid = bool(shape.isValid())
+    if len(_VALID) >= 64:
+        _VALID.clear()
+    _VALID[key] = (shape, valid)
+    return valid
+
+
 def summary(shape: Any, detailed: bool = False) -> Dict[str, Any]:
     """Compact geometric summary of a shape."""
     if shape is None or shape.isNull():
@@ -50,7 +68,7 @@ def summary(shape: Any, detailed: bool = False) -> Dict[str, Any]:
         "volume": num(shape.Volume, 3),
         "bbox": bbox(shape),
         "solids": len(shape.Solids),
-        "valid": bool(shape.isValid()),
+        "valid": is_valid(shape),
     }
     if detailed:
         out["area"] = num(shape.Area, 3)
@@ -231,8 +249,8 @@ def check_expectations(shape: Any, exp: Dict[str, Any]) -> List[Dict[str, Any]]:
                 failures.append({"check": key, "expected": list(want_v), "actual": [num(a) for a in actual]})
     if "solids" in exp and len(shape.Solids) != exp["solids"]:
         failures.append({"check": "solids", "expected": exp["solids"], "actual": len(shape.Solids)})
-    if "valid" in exp and bool(shape.isValid()) != exp["valid"]:
-        failures.append({"check": "valid", "expected": exp["valid"], "actual": bool(shape.isValid())})
+    if "valid" in exp and is_valid(shape) != exp["valid"]:
+        failures.append({"check": "valid", "expected": exp["valid"], "actual": is_valid(shape)})
     return failures
 
 

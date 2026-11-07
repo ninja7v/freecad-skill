@@ -979,6 +979,65 @@ class PartDesignTests(EngineCase):
         )
         self.assertVolume(self.result(r, "Disc"), PI * 900 * 5 - 6 * PI * 4 * 5)
 
+    def test_feature_mirror_and_grid(self):
+        slot = {
+            "op": "extrude",
+            "body": "Part",
+            "name": "Slot",
+            "mode": "remove",
+            "through_all": True,
+            "offset": "=Base.Length",
+            "shapes": [{"circle": [5, 10], "radius": 2}],
+        }
+        r = self.run_ok(self.BODY + [slot, {"op": "mirror", "target": "Slot", "plane": "YZ", "point": [20, 0, 0]}])
+        self.assertVolume(self.result(r, "Part"), 8000 - 2 * PI * 4 * 10)
+        self.assertEqual([x["name"] for x in r["results"]], ["Part"])  # the mirror is a feature of the body
+        vent = dict(slot, name="Vent", shapes=[{"circle": [5, 5], "radius": 1}])
+        grid = {
+            "op": "grid_array",
+            "name": "Vents",
+            "target": "Vent",
+            "count_x": 4,
+            "count_y": 2,
+            "step_x": 10,
+            "step_y": 10,
+        }
+        r = self.run_ok(self.BODY + [vent, grid], doc="g.FCStd")
+        self.assertVolume(self.result(r, "Part"), 8000 - 8 * PI * 10)
+        # Parametric after saving and reopening: the grid follows the body's height.
+        r = self.run_ok([{"op": "set", "target": "Base", "properties": {"Length": 12}}], doc="g.FCStd", new=False)
+        self.assertVolume(self.result(r, "Part"), 9600 - 8 * PI * 12)
+        err = self.run_err(
+            [{"op": "mirror", "target": "Vents", "plane": "XZ", "point": [0, 10, 0]}],
+            "INVALID_PARAM",
+            doc="g.FCStd",
+            new=False,
+        )
+        self.assertIn("Vent", err["hint"])  # names the original feature
+        self.run_err(
+            [{"op": "linear_array", "target": "Vents", "count": 2, "step": [0, 5, 0]}],
+            "INVALID_PARAM",
+            doc="g.FCStd",
+            new=False,
+        )
+        r = self.run_ok(self.BODY + [slot, {"op": "mirror", "target": "Slot", "plane": "YZ", "point": [100, 0, 0]}])
+        self.assertIn("NO_EFFECT", [w["code"] for w in r.get("warnings", [])])  # mirrored copy misses the part
+
+    def test_threaded_hole(self):
+        tapped = {"op": "hole", "body": "Part", "name": "Tap", "at": [[10, 10]], "offset": "=Base.Length", "size": "M6"}
+        r = self.run_ok(self.BODY + [dict(tapped, threaded=True, depth=8), {"op": "export", "filename": "t.step"}])
+        data = self.step(r, -2)["data"]
+        self.assertEqual((data["thread"], data["thread_class"]), ("M6x1.0", "6H"))
+        removed = 8000 - self.result(r, "Part")["volume"]
+        self.assertGreater(removed, PI * 2.5**2 * 8)  # more than the bore: the thread grooves are cut
+        self.assertLess(removed, PI * 3**2 * 8)  # less than the major diameter
+        self.assertGreater(r["exports"][0]["verified"]["faces"], 20)  # real thread geometry
+        r = self.run_ok(self.BODY + [dict(tapped, threaded=True)])  # through all
+        self.assertLess(8000 - self.result(r, "Part")["volume"], PI * 9 * 10)
+        self.run_err(self.BODY + [dict(tapped, threaded=True, type="counterbore")], "INVALID_PARAM")
+        bad = {k: v for k, v in tapped.items() if k != "size"}
+        self.run_err(self.BODY + [dict(bad, diameter=5, threaded=True)], "INVALID_PARAM")
+
     def test_body_rules(self):
         self.run_err(
             [
@@ -1345,6 +1404,62 @@ class ImportTests(EngineCase):
         r = self.run_ok([{"op": "import", "file": "other.FCStd", "name": "Copy"}])
         self.assertVolume(self.result(r, "Copy"), 1000 - PI * 4 * 10)
         self.assertEqual(self.result(r, "Copy")["solids"], 1)  # the cut only, not its inputs
+
+    def _mesh_file(self, name, shape, deflection=0.01):
+        import Mesh
+
+        m = Mesh.Mesh()
+        m.addFacets(shape.tessellate(deflection))
+        m.write(str(self.ws / name))
+        return m
+
+    def test_import_mesh_as_solid(self):
+        import Part
+
+        holed = Part.makeBox(20, 10, 5).cut(Part.makeCylinder(2, 10, App.Vector(10, 5, -1)))
+        m = self._mesh_file("part.stl", holed)
+        r = self.run_ok(
+            [
+                {"op": "import", "file": "part.stl", "name": "Scan"},
+                {"op": "box", "name": "Cutter", "length": 5, "width": 20, "height": 20, "position": [-1, -5, -5]},
+                {"op": "cut", "name": "Trimmed", "base": "Scan", "tool": "Cutter"},
+            ]
+        )
+        data = self.step(r, 0)["data"]
+        self.assertEqual(data["mesh"]["triangles"], m.CountFacets)
+        self.assertLess(data["mesh"]["faces"], m.CountFacets)  # coplanar triangles merged
+        self.assertAlmostEqual(self.step(r, 0)["volume"], holed.Volume, delta=holed.Volume * 0.01)
+        self.assertNotIn("CHECK_UNITS", [w["code"] for w in r.get("warnings", [])])
+        self.assertAlmostEqual(self.result(r, "Trimmed")["volume"], self.step(r, 0)["volume"] - 4 * 10 * 5, delta=0.5)
+        self.assertEqual(self.result(r, "Trimmed")["solids"], 1)
+        self._mesh_file("part.obj", holed)
+        r = self.run_ok([{"op": "import", "file": "part.obj", "refine": False}])
+        self.assertEqual(self.step(r)["data"]["mesh"]["faces"], m.CountFacets)
+
+    def test_import_mesh_rejects_open_and_warns_units(self):
+        import Mesh
+        import Part
+
+        m = Mesh.Mesh()
+        m.addFacets(Part.makeBox(10, 10, 10).tessellate(0.1))
+        m.removeFacets([0])
+        m.write(str(self.ws / "open.stl"))
+        err = self.run_err([{"op": "import", "file": "open.stl"}], "GEOMETRY_INVALID")
+        self.assertIn("not closed", err["message"])
+        (self.ws / "one.stl").write_text(
+            "solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 0\n"
+            "endloop\nendfacet\nendsolid t\n"
+        )
+        err = self.run_err([{"op": "import", "file": "one.stl"}], "GEOMETRY_INVALID")  # FreeCAD reads 0 triangles
+        self.assertIn("not a closed solid", err["message"])
+        self._mesh_file("tiny.stl", Part.makeBox(0.5, 0.5, 0.5))  # e.g. a part modelled in inches or metres
+        r = self.run_ok([{"op": "import", "file": "tiny.stl"}])
+        self.assertIn("CHECK_UNITS", [w["code"] for w in r.get("warnings", [])])
+        two = Part.makeCompound([Part.makeBox(5, 5, 5), Part.makeBox(5, 5, 5, App.Vector(10, 0, 0))])
+        self._mesh_file("two.stl", two)
+        r = self.run_ok([{"op": "import", "file": "two.stl", "name": "Pair"}])
+        self.assertEqual(self.step(r)["data"]["mesh"]["pieces"], 2)
+        self.assertEqual(self.result(r, "Pair")["solids"], 2)
 
 
 class MeasureTests(EngineCase):
@@ -1797,6 +1912,32 @@ class AssemblyTests(EngineCase):
         finally:
             App.closeDocument(doc.Name)
 
+    def test_four_bar_stacked_with_offsets(self):
+        """Layers set by 'offset' between top edges survive the closed-loop solve."""
+
+        def hinge(a, a_edge, b, b_edge, offset):
+            return dict(self.hinge(a, a_edge, b, b_edge), offset=offset)
+
+        top = ("edge", "%CIRCLE and >Z")
+        r = self.run_ok(
+            self.mechanism()
+            + [
+                {
+                    "op": "assembly",
+                    "name": "Mech",
+                    "parts": [{"object": "PlateA", "ground": True}, {"object": "PlateD", "ground": True}]
+                    + [{"object": n} for n in ("Crank", "Coupler", "Rocker")],
+                },
+                hinge("PlateA", top, "Crank", 15, 8),  # top edges 8 apart: crank z 8..16
+                hinge("Crank", ("edge", 16), "Coupler", 15, 8),  # coupler z 16..24
+                hinge("Coupler", ("edge", 16), "Rocker", 16, -8),  # rocker z 8..16, under the coupler
+                hinge("PlateD", top, "Rocker", 15, 8),  # closes the loop
+            ]
+        )
+        self.assertNotIn("warnings", r)  # no INTERFERENCE: the layers held
+        z = {k: v["position"][2] for k, v in self.step(r)["data"]["placements"].items()}
+        self.assertEqual((z["Crank_Part"], z["Coupler_Part"], z["Rocker_Part"]), (8, 16, 8))
+
     def test_four_bar_that_cannot_close_fails(self):
         err = self.run_err(self.four_bar(coupler=160), "RECOMPUTE_FAILED")  # 160 > 40 + 70 + 40
         self.assertIn("closed loop", err["hint"])
@@ -2133,6 +2274,57 @@ class RenderTests(EngineCase):
         self.assertEqual(resp["status"], "error")
         self.assertFalse((self.ws / "b.png").exists())
         self.run_err([BOX, {"op": "render", "filename": "c.jpg"}], "INVALID_PARAM")
+
+
+class TextTests(EngineCase):
+    PLATE = {"op": "box", "name": "Plate", "length": 60, "width": 20, "height": 5}
+
+    def test_engrave_and_emboss(self):
+        label = {"op": "text", "name": "Label", "text": "AB", "size": 8, "height": 2, "position": [5, 5, 4]}
+        r = self.run_ok([self.PLATE, label, {"op": "cut", "name": "Engraved", "base": "Plate", "tool": "Label"}])
+        t = self.step(r, 1)
+        self.assertAlmostEqual(t["bbox"]["min"][2], 4, delta=1e-6)
+        self.assertAlmostEqual(t["bbox"]["max"][2], 6, delta=1e-6)
+        self.assertAlmostEqual(t["bbox"]["max"][1], 13, delta=0.3)  # cap height above the baseline
+        self.assertGreater(t["bbox"]["min"][0], 4.9)
+        self.assertEqual(t["data"]["font"], "osifont-lgpl3fe.ttf")
+        engraved = self.result(r, "Engraved")
+        self.assertLess(engraved["volume"], 6000 - 10)
+        self.assertBBox(engraved, [0, 0, 0], [60, 20, 5])
+        # Edit the text after reopening the document: the ShapeString is restored headless.
+        r = self.run_ok([{"op": "set", "target": "Label", "properties": {"text": "ABCD", "size": 6}}], new=False)
+        self.assertLess(self.result(r, "Engraved")["volume"], 6000 - 10)
+        r = self.run_ok(
+            [
+                self.PLATE,
+                dict(label, name="Raised", position=[30, 10, 4.9], height=1.1, align="center"),
+                {"op": "fuse", "name": "Badge", "objects": ["Plate", "Raised"]},
+            ]
+        )
+        t = self.step(r, 1)
+        self.assertAlmostEqual((t["bbox"]["min"][0] + t["bbox"]["max"][0]) / 2, 30, delta=0.3)
+        self.assertAlmostEqual((t["bbox"]["min"][1] + t["bbox"]["max"][1]) / 2, 10, delta=0.3)
+        badge = self.result(r, "Badge")
+        self.assertEqual(badge["solids"], 1)
+        self.assertAlmostEqual(badge["bbox"]["max"][2], 6, delta=1e-6)
+
+    def test_planes_and_errors(self):
+        r = self.run_ok([{"op": "text", "name": "Front", "text": "AB", "size": 8, "height": 2, "plane": "XZ"}])
+        t = self.step(r)
+        self.assertAlmostEqual(t["bbox"]["min"][1], 0, delta=1e-6)
+        self.assertAlmostEqual(t["bbox"]["max"][1], 2, delta=1e-6)  # extruded along +Y
+        self.assertAlmostEqual(t["bbox"]["max"][2], 8, delta=0.3)  # upright along +Z
+        r = self.run_ok(
+            [{"op": "text", "name": "Side", "text": "AB", "size": 8, "height": 2, "plane": "YZ", "reversed": True}]
+        )
+        self.assertAlmostEqual(self.step(r)["bbox"]["min"][0], -2, delta=1e-6)
+        self.run_err([{"op": "text", "text": "   ", "size": 5, "height": 1}], "INVALID_REQUEST")
+        self.run_err([{"op": "text", "text": "A", "size": 5, "height": 1, "font": "missing.ttf"}], "INVALID_PARAM")
+        (self.ws / "notes.txt").write_text("x")
+        self.run_err([{"op": "text", "text": "A", "size": 5, "height": 1, "font": "notes.txt"}], "INVALID_PARAM")
+        self.run_err([{"op": "text", "text": "A", "size": 5, "height": 1, "font": "../x.ttf"}], "PATH_NOT_ALLOWED")
+        self.run_ok([{"op": "text", "name": "T", "text": "A", "size": 5, "height": 1}])
+        self.run_err([{"op": "set", "target": "T", "properties": {"text": ""}}], "INVALID_PARAM", new=False)
 
 
 class RemovedPythonOpTests(EngineCase):

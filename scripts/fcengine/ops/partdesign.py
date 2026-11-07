@@ -1,4 +1,4 @@
-"""PartDesign: bodies and sketch-based features (pad, pocket, revolution, groove, hole).
+"""PartDesign: bodies, sketch-based features (pad, pocket, revolution, groove, hole) and their patterns.
 
 Design choices (probed on FreeCAD 1.1):
 
@@ -9,7 +9,9 @@ Design choices (probed on FreeCAD 1.1):
   topology changes.
 - 'offset' can be an expression ('=Base.Length') so a feature stays on the face
   it was placed on when dimensions change.
-- Arbitrary axes (revolve, patterns) use deactivated PartDesign::Line datums.
+- Arbitrary axes (revolve, patterns) use deactivated PartDesign::Line datums, and mirror planes
+  deactivated PartDesign::Plane datums.
+- Grids are MultiTransforms: FreeCAD cannot pattern a pattern.
 """
 
 from __future__ import annotations
@@ -102,7 +104,7 @@ def finish(ctx: Context, body: Any, obj: Any, before: float, remove: Optional[bo
             f"'{obj.Name}' split body '{body.Name}' into {len(shape.Solids)} solids",
             hint="A body is one solid: added material must touch the existing part. Use a separate body for separate parts.",
         )
-    if not shape.isValid():
+    if not geometry.is_valid(shape):
         raise SkillError(errors.GEOMETRY_INVALID, f"'{obj.Name}' produced invalid geometry in body '{body.Name}'")
     after = shape.Volume
     eps = 1e-6 * max(before, 1.0)
@@ -198,12 +200,29 @@ def revolve(ctx: Context, p: Dict[str, Any]) -> Any:
 
 
 HOLE_CUT = {"simple": "None", "counterbore": "Counterbore", "countersink": "Countersink"}
+THREAD_CLASS = "6H"  # the usual tolerance class for internal ISO metric threads
+
+
+def _thread_size(obj: Any, size: str) -> str:
+    """FreeCAD's coarse ISO thread name for a size: 'M6' -> 'M6x1.0'."""
+    for name in obj.getEnumerationsOfProperty("ThreadSize"):
+        if name.startswith(size + "x"):
+            return name
+    raise SkillError(errors.UNSUPPORTED, f"FreeCAD has no ISO metric thread for {size}")
 
 
 def hole(ctx: Context, p: Dict[str, Any]) -> Any:
     bd = get_body(ctx, p["body"])
     _require_material(bd, "drill")
     kind = p.get("type", "simple")
+    threaded = bool(p.get("threaded"))
+    if threaded and ("size" not in p or kind != "simple"):
+        raise SkillError(
+            errors.INVALID_PARAM,
+            "'threaded' needs a metric 'size' and type 'simple'",
+            hint='Example: {"op": "hole", "body": "Plate", "at": [[10, 10]], "size": "M5", "threaded": true, '
+            '"depth": 10}. A counterbore or countersink seats a screw head, which needs a clearance hole.',
+        )
     dims: Dict[str, float] = {}
     if "size" in p:
         dims = fasteners.hole_dimensions(p["size"], p.get("fit", "clearance"), kind)
@@ -218,8 +237,17 @@ def hole(ctx: Context, p: Dict[str, Any]) -> Any:
     bd.addObject(obj)
     ctx.own_helper(obj, sk)
     obj.Profile = sk
-    obj.Threaded = False
-    ctx.assign(obj, "Diameter", diameter)
+    if threaded:
+        # FreeCAD sizes the bore from the thread (its minor diameter) and models the thread over the full depth.
+        obj.Threaded = True
+        obj.ThreadType = "ISOMetricProfile"
+        obj.ThreadSize = _thread_size(obj, p["size"])
+        obj.ThreadClass = THREAD_CLASS
+        obj.ThreadDepthType = "Hole Depth"
+        obj.ModelThread = True
+    else:
+        obj.Threaded = False
+        ctx.assign(obj, "Diameter", diameter)
     if "depth" in p:
         obj.DepthType = "Dimension"
         ctx.assign(obj, "Depth", p["depth"])
@@ -258,24 +286,69 @@ def hole(ctx: Context, p: Dict[str, Any]) -> Any:
             "holes": len(p["at"]),
             "diameter": geometry.num(obj.Diameter.Value),
             "type": kind,
+            **(
+                {"thread": obj.ThreadSize, "thread_class": obj.ThreadClass, "modelled": True, "note": _THREAD_NOTE}
+                if threaded
+                else {}
+            ),
             **({"cut_diameter": cut_d} if kind != "simple" else {}),
             **({"cut_depth": cut_h} if kind == "counterbore" else {}),
         },
     }
 
 
+_THREAD_NOTE = (
+    "diameter is the thread's minor diameter; the ISO thread profile is modelled over the whole depth. For "
+    "3D prints below about M5, a plain hole sized for a self-tapping screw usually works better."
+)
+
+
 # ------------------------------------------------------------------ patterns of features
+
+# Features that repeat other features. FreeCAD cannot repeat these themselves (probed: "Only additive and
+# subtractive features can be transformed"), so patterns and mirrors must name the original feature.
+TRANSFORMED = (
+    "PartDesign::LinearPattern",
+    "PartDesign::PolarPattern",
+    "PartDesign::Mirrored",
+    "PartDesign::MultiTransform",
+)
+SUBTRACTIVE = ("PartDesign::Pocket", "PartDesign::Hole", "PartDesign::Groove")
+
+
+def make_plane(ctx: Context, body: Any, owner: str, normal: List[float], point: List[float]) -> Any:
+    dp = ctx.doc.addObject("PartDesign::Plane", f"{owner}_Plane")
+    dp.Label = dp.Name
+    body.addObject(dp)
+    dp.MapMode = "Deactivated"
+    dp.Placement = App.Placement(App.Vector(*point), App.Rotation(App.Vector(0, 0, 1), App.Vector(*normal)))
+    return dp
+
+
+def _linear(ctx: Context, body: Any, obj: Any, name: str, step: Any, count: int) -> Any:
+    """A LinearPattern (stand-alone, or a step of a MultiTransform) of 'count' instances 'step' apart."""
+    lp = ctx.doc.addObject("PartDesign::LinearPattern", name)
+    lp.Label = lp.Name
+    axis = make_axis(ctx, body, name, list(step), [0, 0, 0])
+    body.addObject(lp)
+    lp.Direction = (axis, [""])
+    lp.Length = step.Length * (count - 1)
+    lp.Occurrences = count
+    ctx.own_helper(obj, axis)
+    return lp
 
 
 def pattern(ctx: Context, p: Dict[str, Any], kind: str, target: Any) -> Any:
     bd = body_of(target)
     if bd is None:
         raise SkillError(errors.INTERNAL, "pattern target is not in a body")
-    if kind == "grid":
+    if target.TypeId in TRANSFORMED:
+        originals = [o.Name for o in getattr(target, "Originals", [])]
         raise SkillError(
-            errors.UNSUPPORTED,
-            "grid_array of a PartDesign feature is not supported",
-            hint="For holes, give several points in one 'hole' op ('at'); otherwise use two linear_array steps on separate features.",
+            errors.INVALID_PARAM,
+            f"'{target.Name}' is itself a pattern or mirror; FreeCAD cannot repeat it",
+            hint=f"Name the original feature instead ({', '.join(originals) or 'the pad, pocket or hole'}). "
+            "For a grid, use one grid_array; for holes, give all centres in one 'hole' op ('at').",
         )
     before = _volume(bd)
     if kind == "linear":
@@ -287,7 +360,8 @@ def pattern(ctx: Context, p: Dict[str, Any], kind: str, target: Any) -> Any:
         obj.Direction = (axis, [""])
         obj.Length = step.Length * (p["count"] - 1)
         obj.Occurrences = p["count"]
-    else:
+        ctx.own_helper(obj, axis)
+    elif kind == "polar":
         obj = ctx.add("PartDesign::PolarPattern", p.get("name"), "PolarPattern")
         axis = make_axis(ctx, bd, obj.Name, p["axis"], p["center"])
         bd.addObject(obj)
@@ -295,8 +369,37 @@ def pattern(ctx: Context, p: Dict[str, Any], kind: str, target: Any) -> Any:
         obj.Axis = (axis, [""])
         obj.Angle = p["angle"]
         obj.Occurrences = p["count"]
-    ctx.own_helper(obj, axis)
-    remove = target.TypeId in ("PartDesign::Pocket", "PartDesign::Hole", "PartDesign::Groove")
+        ctx.own_helper(obj, axis)
+    elif kind == "mirror":
+        obj = ctx.add("PartDesign::Mirrored", p.get("name"), "Mirrored")
+        normal = p.get("normal") or {"XY": [0, 0, 1], "XZ": [0, 1, 0], "YZ": [1, 0, 0]}[p["plane"]]
+        plane = make_plane(ctx, bd, obj.Name, normal, p["point"])
+        bd.addObject(obj)
+        obj.Originals = [target]
+        obj.MirrorPlane = (plane, [""])
+        ctx.own_helper(obj, plane)
+    else:  # grid: one MultiTransform with a linear step per direction (a pattern of a pattern is not allowed)
+        dirs = [
+            (App.Vector(p["step_x"], 0, 0), p["count_x"], "X"),
+            (App.Vector(0, p["step_y"], 0), p["count_y"], "Y"),
+            (App.Vector(0, 0, p["step_z"]), p["count_z"], "Z"),
+        ]
+        dirs = [d for d in dirs if d[1] > 1]
+        for step, _count, axis_name in dirs:
+            if step.Length <= 0:
+                raise SkillError(
+                    errors.INVALID_PARAM, f"step_{axis_name.lower()} must not be 0 when count_{axis_name.lower()} > 1"
+                )
+        if not dirs:
+            raise SkillError(errors.INVALID_PARAM, "grid_array needs a count above 1 in at least one direction")
+        obj = ctx.add("PartDesign::MultiTransform", p.get("name"), "GridPattern")
+        bd.addObject(obj)
+        obj.Originals = [target]
+        steps = [_linear(ctx, bd, obj, f"{obj.Name}_{a}", step, n) for step, n, a in dirs]
+        for st in steps:
+            ctx.own_helper(obj, st)
+        obj.Transformations = steps
+    remove = target.TypeId in SUBTRACTIVE
     return finish(ctx, bd, obj, before, remove)
 
 

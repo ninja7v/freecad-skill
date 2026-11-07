@@ -126,19 +126,21 @@ The output is a single JSON object on stdout. The exit code is `0` on success, `
 
 ### Operations
 
-- **Solids:** `box`, `cylinder`, `sphere`, `cone`, `torus`, `prism`
+- **Solids:** `box`, `cylinder`, `sphere`, `cone`, `torus`, `prism`, `import` (STEP, IGES, BREP, FCStd,
+  closed STL/OBJ/3MF meshes, FreeCAD library parts)
 - **Profiles:** `extrude`, `revolve`, from rounded rectangles, circles, slots, polygons and arc paths,
   built as editable FreeCAD sketches
-- **PartDesign:** `body`, `hole` (ISO clearance and tap sizes, counterbore, countersink). `extrude` and
-  `revolve` with `body` make pads, pockets, revolutions and grooves. Fillets, chamfers, shells and patterns
-  work on bodies too.
+- **PartDesign:** `body`, `hole` (ISO clearance and tap sizes, counterbore, countersink, modelled ISO
+  threads). `extrude` and `revolve` with `body` make pads, pockets, revolutions and grooves. Fillets,
+  chamfers, shells, patterns and mirrors work on bodies too.
+- **Text:** `text` (lettering as a solid, to engrave or emboss)
 - **Booleans:** `cut`, `fuse`, `common`
 - **Features:** `fillet`, `chamfer`, `shell`
 - **Patterns:** `linear_array`, `grid_array`, `polar_array`
 - **Transforms:** `move`, `rotate`, `place`, `mirror`, `copy`, `scale`
 - **Assemblies:** `assembly`, `joint` (fixed, revolute, cylindrical, slider, ball, parallel, perpendicular).
   Every joint is verified after solving, interferences are reported, and joints follow upstream edits.
-- **Editing:** `set`, `set_params`, `delete`, `rename`, `python` (opt-in)
+- **Editing:** `set`, `set_params`, `delete`, `rename`
 - **Queries:** `inspect`, `check`, `measure` (clearance, interference, mass), `fem_static` (linear stress
   analysis with equilibrium and mesh-convergence checks, safety factor, stress map)
 - **Output:** `export` (including flat DXF/SVG outlines for laser cutting), `drawing` (dimensioned DXF
@@ -169,9 +171,10 @@ an enclosure, a flanged bushing, a wheel, an L-bracket and a table. Each one ass
 
 ## Limitations
 
-- Profiles support lines, arcs, circles and slots, but not splines or dimensional constraints.
-- Not yet supported: nested assemblies, motion joints (gears, belts, screws), non-linear/modal/thermal FEM, PartDesign loft, sweep and mirror, and PDF/SVG drawing pages
-  without the GUI (drawings are written as DXF).
+- Profiles have no dimensional constraints (edit them by resending their shapes).
+- Not yet supported: nested assemblies, motion joints (gears, belts, screws), non-linear/modal/thermal FEM,
+  surface modelling, and PDF/SVG drawing pages without the GUI (drawings are written as DXF).
+- Imported meshes (STL, OBJ, 3MF) become faceted solids: fine for cuts and fusions, not for fillets or FEM.
 - Requires FreeCAD 1.1 or newer. FreeCAD 1.0's Draft module needs the GUI libraries even when headless,
   which breaks arrays and copies on conda's macOS and Windows builds, so older versions are refused with
   `FREECAD_VERSION`. Verified by hand on Linux with FreeCAD 1.1 (snap); CI runs the suite on Linux, macOS

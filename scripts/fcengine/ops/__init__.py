@@ -25,6 +25,7 @@ from . import (
     render,
     solids,
     sweeps,
+    text,
     transforms,
 )
 
@@ -49,5 +50,6 @@ for _mod in (
     sweeps,
     material,
     importer,
+    text,
 ):
     HANDLERS.update(_mod.HANDLERS)

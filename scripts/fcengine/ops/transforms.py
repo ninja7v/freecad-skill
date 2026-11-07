@@ -82,6 +82,13 @@ def place(ctx: Context, p: Dict[str, Any]) -> Any:
 
 
 def mirror(ctx: Context, p: Dict[str, Any]) -> Any:
+    from .patterns import _pd_target
+
+    feat = _pd_target(ctx, p)
+    if feat is not None:  # a feature of a body: a native PartDesign::Mirrored inside the same body
+        from .partdesign import pattern
+
+        return pattern(ctx, p, "mirror", feat)
     target = ctx.get(p["target"])
     normal = p.get("normal") or {"XY": [0, 0, 1], "XZ": [0, 1, 0], "YZ": [1, 0, 0]}[p["plane"]]
     obj = ctx.add("Part::Mirroring", p.get("name"), "Mirror")

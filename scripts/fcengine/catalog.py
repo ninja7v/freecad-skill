@@ -123,6 +123,11 @@ DIRECTION = Param(
     "Axis direction of the solid (alternative to 'rotation'). Default +Z.",
 )
 TARGET = Param("target", "name", "Object to operate on.", required=True)
+PD_PATTERN_NOTE = (
+    "If 'target' is a feature of a PartDesign body (a pad, pocket, hole, ...), the feature is repeated natively "
+    "inside the body, in body coordinates; 'fuse' does not apply. A pattern or mirror can't be repeated again: "
+    "name the original feature."
+)
 SHAPES = Param(
     "shapes",
     "shapes",
@@ -415,6 +420,75 @@ OPS: List[Op] = [
     ),
     # ------------------------------------------------------------ PartDesign
     Op(
+        "text",
+        "profile",
+        "Text as a solid: letters from a font (Draft ShapeString), extruded along the plane normal. Fuse it onto a "
+        "part for raised lettering, or cut it from the part to engrave it.",
+        (
+            Param("text", "label", "The text (one line, up to 100 characters).", required=True),
+            Param("size", "number", "Height of capital letters, in mm.", required=True, gt=0),
+            Param(
+                "height",
+                "number",
+                "Extrusion distance along the plane normal (letter depth).",
+                required=True,
+                gt=0,
+                expr=True,
+            ),
+            Param(
+                "position",
+                "vector",
+                "Where the 'align' point of the text goes (absolute [x, y, z]).",
+                default=[0, 0, 0],
+            ),
+            Param(
+                "plane",
+                "enum",
+                "Plane the text lies in: XY reads from above (+Z), XZ from the front (-Y), YZ from the right (+X).",
+                default="XY",
+                choices=("XY", "XZ", "YZ"),
+            ),
+            Param(
+                "align",
+                "enum",
+                "Which point of the text lands on 'position' (bottom = baseline, top = cap height).",
+                default="bottom_left",
+                choices=(
+                    "bottom_left",
+                    "bottom_center",
+                    "bottom_right",
+                    "middle_left",
+                    "center",
+                    "middle_right",
+                    "top_left",
+                    "top_center",
+                    "top_right",
+                ),
+            ),
+            Param("angle", "number", "Rotation in the plane, counter-clockwise as read, in degrees.", default=0),
+            Param("reversed", "bool", "Extrude against the plane normal instead of along it.", default=False),
+            Param(
+                "font",
+                "path",
+                "A .ttf/.otf font file in the workspace. Default: FreeCAD's bundled osifont (a plain technical font).",
+            ),
+            _name("Text"),
+        ),
+        notes="Extrusion goes along the plane normal: XY -> +Z, XZ -> +Y, YZ -> +X ('reversed' flips it). To engrave "
+        "a top face at z = 10 by 1 mm: text at z = 9 with height 2, then cut it (the extra 1 mm passes through the "
+        "face). For raised text, start it inside the face (z = 9.9) and fuse. Each letter is a separate solid until "
+        "fused or cut. Edit with set: text, size, font, align, height.",
+        example={
+            "op": "text",
+            "name": "Label",
+            "text": "V2.1",
+            "size": 8,
+            "height": 2,
+            "position": [40, 25, 5],
+            "align": "center",
+        },
+    ),
+    Op(
         "body",
         "partdesign",
         "Create a PartDesign body: a single solid built feature by feature (pad, pocket, hole, fillet, ...), the way "
@@ -451,11 +525,19 @@ OPS: List[Op] = [
             Param(
                 "fit",
                 "enum",
-                "With 'size': 'clearance' (ISO 273 medium) for a screw to pass, 'tap' for a tap drill.",
+                "With 'size': 'clearance' (ISO 273 medium) for a screw to pass, 'tap' for a tap drill (an unthreaded "
+                "bore at the tap drill size). Ignored when 'threaded'.",
                 default="clearance",
                 choices=("clearance", "tap"),
             ),
             Param("diameter", "number", "Explicit hole diameter (instead of 'size').", gt=0, expr=True),
+            Param(
+                "threaded",
+                "bool",
+                "With 'size' and type 'simple': model the ISO metric coarse thread (class 6H) in the hole, over its "
+                "whole depth, e.g. for a threaded hole in a printed part or a model that shows the thread.",
+                default=False,
+            ),
             Param("type", "enum", "Hole seat.", default="simple", choices=("simple", "counterbore", "countersink")),
             Param("cut_diameter", "number", "Counterbore/countersink diameter (default from 'size').", gt=0),
             Param("cut_depth", "number", "Counterbore depth (default from 'size').", gt=0),
@@ -464,7 +546,9 @@ OPS: List[Op] = [
             _name("Hole"),
         ),
         one_of=(("size", "diameter"),),
-        notes="Counterbores fit ISO 4762 socket head screws (DIN 974-1); countersinks fit ISO 10642 (90 degrees).",
+        notes="Counterbores fit ISO 4762 socket head screws (DIN 974-1); countersinks fit ISO 10642 (90 degrees). "
+        "A 'threaded' hole is bored at the thread's minor diameter and the thread is real geometry (slower to "
+        "compute and export than a plain hole; give 'depth' for blind tapped holes).",
         example={
             "op": "hole",
             "body": "Bracket",
@@ -631,6 +715,7 @@ OPS: List[Op] = [
             Param("fuse", "bool", "Fuse touching instances into one solid.", default=True),
             _name("LinearArray"),
         ),
+        notes=PD_PATTERN_NOTE,
         example={"op": "linear_array", "target": "Hole", "count": 4, "step": [20, 0, 0]},
     ),
     Op(
@@ -648,6 +733,8 @@ OPS: List[Op] = [
             Param("fuse", "bool", "Fuse touching instances into one solid.", default=True),
             _name("GridArray"),
         ),
+        notes=PD_PATTERN_NOTE + " In a body, the grid is one MultiTransform feature.",
+        example={"op": "grid_array", "target": "Vent", "count_x": 5, "count_y": 3, "step_x": 8, "step_y": 8},
     ),
     Op(
         "polar_array",
@@ -669,6 +756,7 @@ OPS: List[Op] = [
             Param("fuse", "bool", "Fuse touching instances into one solid.", default=True),
             _name("PolarArray"),
         ),
+        notes=PD_PATTERN_NOTE,
     ),
     # ------------------------------------------------------------ transforms
     Op(
@@ -698,7 +786,8 @@ OPS: List[Op] = [
     Op(
         "mirror",
         "transform",
-        "Create a mirrored copy of an object (Part::Mirroring). The original is kept.",
+        "Create a mirrored copy of an object (Part::Mirroring). The original is kept. For a feature of a "
+        "PartDesign body (pad, pocket, hole...), mirrors the feature inside the body (PartDesign::Mirrored).",
         (
             TARGET,
             Param("plane", "enum", "Mirror plane through 'point'.", choices=("XY", "XZ", "YZ")),
@@ -707,6 +796,10 @@ OPS: List[Op] = [
             _name("Mirror"),
         ),
         one_of=(("plane", "normal"),),
+        notes="For a body feature, 'point' and 'normal' are body coordinates, and the mirrored copy must touch the "
+        "part (a body stays one solid). 'fuse' does not apply. A pattern or mirror can't be mirrored again: name "
+        "the original feature.",
+        example={"op": "mirror", "target": "Slot", "plane": "YZ", "point": [40, 0, 0]},
     ),
     Op(
         "copy",
@@ -804,7 +897,8 @@ OPS: List[Op] = [
     Op(
         "import",
         "solid",
-        "Import a solid from a STEP/IGES/BREP/FCStd file in the workspace, or a ready-made part from the official "
+        "Import a solid from a STEP/IGES/BREP/FCStd file or a closed mesh (STL/OBJ/3MF/PLY/OFF) in the workspace, "
+        "or a ready-made part from the official "
         "FreeCAD library (bearings, motors, fasteners, profiles, electronics...). Find library parts with "
         "'fcskill.py library <keywords>'.",
         (
@@ -814,7 +908,17 @@ OPS: List[Op] = [
                 "Library part, as given by 'fcskill.py library' ('part'), e.g. "
                 "'Mechanical Parts/Bearings/608ZZ_Ball_Bearing'. Downloaded on first use.",
             ),
-            Param("file", "path", "A .step/.stp, .iges/.igs, .brep or .FCStd file in the workspace."),
+            Param(
+                "file",
+                "path",
+                "A .step/.stp, .iges/.igs, .brep or .FCStd file, or a .stl/.obj/.3mf/.ply/.off mesh, in the workspace.",
+            ),
+            Param(
+                "refine",
+                "bool",
+                "Meshes: merge coplanar triangles into larger faces (cleaner, faster booleans). Skipped above 10000 triangles.",
+                default=True,
+            ),
             Param(
                 "anchor",
                 "enum",
@@ -830,7 +934,10 @@ OPS: List[Op] = [
         one_of=(("library", "file"),),
         notes="The result is a fixed shape: place, cut, fuse, measure, give it a material or add it to an assembly, but its "
         "dimensions are not editable. Check the reported bbox: library parts keep their author's orientation. "
-        "Library parts are CC-BY 3.0: pass the reported 'attribution' on to the user.",
+        "Library parts are CC-BY 3.0: pass the reported 'attribution' on to the user. A mesh becomes a solid made of "
+        "its triangles (flat facets, no true cylinders), so cut, fuse, measure and export work, but fillets on its "
+        "edges and FEM are unreliable. Meshes must be closed and manifold (repair them first otherwise), up to 20000 "
+        "triangles, and are slow to work with (booleans take seconds per few thousand triangles); mesh files carry no units, so check the reported bbox (CHECK_UNITS warns when the size is implausible).",
         example={
             "op": "import",
             "library": "Mechanical Parts/Bearings/608ZZ_Ball_Bearing",
