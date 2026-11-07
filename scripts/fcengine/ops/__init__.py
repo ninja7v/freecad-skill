@@ -23,9 +23,9 @@ from . import (
     patterns,
     query,
     render,
-    script,
     solids,
     sweeps,
+    text,
     transforms,
 )
 
@@ -42,7 +42,6 @@ for _mod in (
     query,
     export,
     render,
-    script,
     partdesign,
     measure,
     drawing,
@@ -51,5 +50,6 @@ for _mod in (
     sweeps,
     material,
     importer,
+    text,
 ):
     HANDLERS.update(_mod.HANDLERS)

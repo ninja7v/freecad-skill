@@ -94,12 +94,13 @@ Parametric regular polygonal prism (Part::Prism). 'position' is the centre of th
 
 ### `import`
 
-Import a solid from a STEP/IGES/BREP/FCStd file in the workspace, or a ready-made part from the official FreeCAD library (bearings, motors, fasteners, profiles, electronics...). Find library parts with 'fcskill.py library <keywords>'.
+Import a solid from a STEP/IGES/BREP/FCStd file or a closed mesh (STL/OBJ/3MF/PLY/OFF) in the workspace, or a ready-made part from the official FreeCAD library (bearings, motors, fasteners, profiles, electronics...). Find library parts with 'fcskill.py library <keywords>'.
 
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `library` | string |  |  |  | Library part, as given by 'fcskill.py library' ('part'), e.g. 'Mechanical Parts/Bearings/608ZZ_Ball_Bearing'. Downloaded on first use. |
-| `file` | path |  |  |  | A .step/.stp, .iges/.igs, .brep or .FCStd file in the workspace. |
+| `file` | path |  |  |  | A .step/.stp, .iges/.igs, .brep or .FCStd file, or a .stl/.obj/.3mf/.ply/.off mesh, in the workspace. |
+| `refine` | bool |  | `true` |  | Meshes: merge coplanar triangles into larger faces (cleaner, faster booleans). Skipped above 10000 triangles. |
 | `anchor` | enum |  | `"origin"` | `origin` \| `center` \| `bottom_center` \| `min_corner` | Which point of the part's bounding box lands on 'position': as modelled ('origin'), 'center', 'bottom_center' or 'min_corner'. |
 | `position` | vector |  | `[0, 0, 0]` |  | Where the anchor goes. |
 | `rotation` | rotation |  |  |  | Rotation about the anchor point, after anchoring. |
@@ -107,7 +108,7 @@ Import a solid from a STEP/IGES/BREP/FCStd file in the workspace, or a ready-mad
 
 Give exactly one of: `library`, `file`.
 
-The result is a fixed shape: place, cut, fuse, measure, give it a material or add it to an assembly, but its dimensions are not editable. Check the reported bbox: library parts keep their author's orientation. Library parts are CC-BY 3.0: pass the reported 'attribution' on to the user.
+The result is a fixed shape: place, cut, fuse, measure, give it a material or add it to an assembly, but its dimensions are not editable. Check the reported bbox: library parts keep their author's orientation. Library parts are CC-BY 3.0: pass the reported 'attribution' on to the user. A mesh becomes a solid made of its triangles (flat facets, no true cylinders), so cut, fuse, measure and export work, but fillets on its edges and FEM are unreliable. Meshes must be closed and manifold (repair them first otherwise), up to 20000 triangles, and are slow to work with (booleans take seconds per few thousand triangles); mesh files carry no units, so check the reported bbox (CHECK_UNITS warns when the size is implausible).
 
 ```json
 {"op": "import", "library": "Mechanical Parts/Bearings/608ZZ_Ball_Bearing", "name": "Bearing", "anchor": "center", "position": [0, 0, 20]}
@@ -210,6 +211,29 @@ The profile is placed at the start of the path, perpendicular to it: profile (0,
 {"op": "sweep", "name": "Handle", "shapes": [{"circle": [0, 0], "radius": 6}, {"circle": [0, 0], "radius": 4}], "path": [[0, 0, 0], [0, 0, 40], [60, 0, 40], [60, 0, 0]], "corner_radius": 12}
 ```
 
+### `text`
+
+Text as a solid: letters from a font (Draft ShapeString), extruded along the plane normal. Fuse it onto a part for raised lettering, or cut it from the part to engrave it.
+
+| Param | Type | Required | Default | Constraints | Description |
+|---|---|---|---|---|---|
+| `text` | label | **yes** |  |  | The text (one line, up to 100 characters). |
+| `size` | number | **yes** |  | > 0 | Height of capital letters, in mm. |
+| `height` | number | **yes** |  | > 0; `=expr` ok | Extrusion distance along the plane normal (letter depth). |
+| `position` | vector |  | `[0, 0, 0]` |  | Where the 'align' point of the text goes (absolute [x, y, z]). |
+| `plane` | enum |  | `"XY"` | `XY` \| `XZ` \| `YZ` | Plane the text lies in: XY reads from above (+Z), XZ from the front (-Y), YZ from the right (+X). |
+| `align` | enum |  | `"bottom_left"` | `bottom_left` \| `bottom_center` \| `bottom_right` \| `middle_left` \| `center` \| `middle_right` \| `top_left` \| `top_center` \| `top_right` | Which point of the text lands on 'position' (bottom = baseline, top = cap height). |
+| `angle` | number |  | `0` |  | Rotation in the plane, counter-clockwise as read, in degrees. |
+| `reversed` | bool |  | `false` |  | Extrude against the plane normal instead of along it. |
+| `font` | path |  |  |  | A .ttf/.otf font file in the workspace. Default: FreeCAD's bundled osifont (a plain technical font). |
+| `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('Text', 'Text001', ...). |
+
+Extrusion goes along the plane normal: XY -> +Z, XZ -> +Y, YZ -> +X ('reversed' flips it). To engrave a top face at z = 10 by 1 mm: text at z = 9 with height 2, then cut it (the extra 1 mm passes through the face). For raised text, start it inside the face (z = 9.9) and fuse. Each letter is a separate solid until fused or cut. Edit with set: text, size, font, align, height.
+
+```json
+{"op": "text", "name": "Label", "text": "V2.1", "size": 8, "height": 2, "position": [40, 25, 5], "align": "center"}
+```
+
 ## PartDesign
 
 ### `body`
@@ -239,8 +263,9 @@ Drill one or more holes into a body (PartDesign::Hole): simple, counterbored or 
 | `plane` | enum |  | `"XY"` | `XY` \| `XZ` \| `YZ` | Plane of the 'at' coordinates. |
 | `offset` | number |  | `0` | `=expr` ok | Distance of the starting plane along its normal, usually the face the hole starts on, e.g. '=Base.Length'. |
 | `size` | enum |  |  | `M2` \| `M2.5` \| `M3` \| `M4` \| `M5` \| `M6` \| `M8` \| `M10` \| `M12` \| `M14` \| `M16` \| `M20` | Metric screw size; sets the diameter from 'fit' and the seat from 'type'. |
-| `fit` | enum |  | `"clearance"` | `clearance` \| `tap` | With 'size': 'clearance' (ISO 273 medium) for a screw to pass, 'tap' for a tap drill. |
+| `fit` | enum |  | `"clearance"` | `clearance` \| `tap` | With 'size': 'clearance' (ISO 273 medium) for a screw to pass, 'tap' for a tap drill (an unthreaded bore at the tap drill size). Ignored when 'threaded'. |
 | `diameter` | number |  |  | > 0; `=expr` ok | Explicit hole diameter (instead of 'size'). |
+| `threaded` | bool |  | `false` |  | With 'size' and type 'simple': model the ISO metric coarse thread (class 6H) in the hole, over its whole depth, e.g. for a threaded hole in a printed part or a model that shows the thread. |
 | `type` | enum |  | `"simple"` | `simple` \| `counterbore` \| `countersink` | Hole seat. |
 | `cut_diameter` | number |  |  | > 0 | Counterbore/countersink diameter (default from 'size'). |
 | `cut_depth` | number |  |  | > 0 | Counterbore depth (default from 'size'). |
@@ -250,7 +275,7 @@ Drill one or more holes into a body (PartDesign::Hole): simple, counterbored or 
 
 Give exactly one of: `size`, `diameter`.
 
-Counterbores fit ISO 4762 socket head screws (DIN 974-1); countersinks fit ISO 10642 (90 degrees).
+Counterbores fit ISO 4762 socket head screws (DIN 974-1); countersinks fit ISO 10642 (90 degrees). A 'threaded' hole is bored at the thread's minor diameter and the thread is real geometry (slower to compute and export than a plain hole; give 'depth' for blind tapped holes).
 
 ```json
 {"op": "hole", "body": "Bracket", "at": [[10, 10], [70, 10]], "offset": "=Base.Length", "size": "M5", "type": "counterbore"}
@@ -393,6 +418,8 @@ Repeat an object 'count' times, each copy offset by 'step' (parametric Draft arr
 | `fuse` | bool |  | `true` |  | Fuse touching instances into one solid. |
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('LinearArray', 'LinearArray001', ...). |
 
+If 'target' is a feature of a PartDesign body (a pad, pocket, hole, ...), the feature is repeated natively inside the body, in body coordinates; 'fuse' does not apply. A pattern or mirror can't be repeated again: name the original feature.
+
 ```json
 {"op": "linear_array", "target": "Hole", "count": 4, "step": [20, 0, 0]}
 ```
@@ -413,6 +440,12 @@ Rectangular grid of an object along X and Y (optionally Z) (parametric Draft arr
 | `fuse` | bool |  | `true` |  | Fuse touching instances into one solid. |
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('GridArray', 'GridArray001', ...). |
 
+If 'target' is a feature of a PartDesign body (a pad, pocket, hole, ...), the feature is repeated natively inside the body, in body coordinates; 'fuse' does not apply. A pattern or mirror can't be repeated again: name the original feature. In a body, the grid is one MultiTransform feature.
+
+```json
+{"op": "grid_array", "target": "Vent", "count_x": 5, "count_y": 3, "step_x": 8, "step_y": 8}
+```
+
 ### `polar_array`
 
 Repeat an object around an axis (parametric Draft polar array).
@@ -426,6 +459,8 @@ Repeat an object around an axis (parametric Draft polar array).
 | `center` | vector |  | `[0, 0, 0]` |  | A point on the rotation axis. |
 | `fuse` | bool |  | `true` |  | Fuse touching instances into one solid. |
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('PolarArray', 'PolarArray001', ...). |
+
+If 'target' is a feature of a PartDesign body (a pad, pocket, hole, ...), the feature is repeated natively inside the body, in body coordinates; 'fuse' does not apply. A pattern or mirror can't be repeated again: name the original feature.
 
 ## Transforms
 
@@ -463,7 +498,7 @@ Set an object's absolute position and/or rotation (replaces its Placement compon
 
 ### `mirror`
 
-Create a mirrored copy of an object (Part::Mirroring). The original is kept.
+Create a mirrored copy of an object (Part::Mirroring). The original is kept. For a feature of a PartDesign body (pad, pocket, hole...), mirrors the feature inside the body (PartDesign::Mirrored).
 
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
@@ -474,6 +509,12 @@ Create a mirrored copy of an object (Part::Mirroring). The original is kept.
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('Mirror', 'Mirror001', ...). |
 
 Give exactly one of: `plane`, `normal`.
+
+For a body feature, 'point' and 'normal' are body coordinates, and the mirrored copy must touch the part (a body stays one solid). 'fuse' does not apply. A pattern or mirror can't be mirrored again: name the original feature.
+
+```json
+{"op": "mirror", "target": "Slot", "plane": "YZ", "point": [40, 0, 0]}
+```
 
 ### `copy`
 
@@ -556,20 +597,6 @@ Give 'material', 'color' or both. Plastic presets come with a neutral default co
 
 ```json
 {"op": "material", "targets": ["Rim"], "material": "aluminium"}
-```
-
-### `python`
-
-Escape hatch: run FreeCAD Python for something no op covers. Disabled unless the user set FCSKILL_ALLOW_PYTHON=1.
-
-| Param | Type | Required | Default | Constraints | Description |
-|---|---|---|---|---|---|
-| `code` | string | **yes** |  |  | Python source. Available: App, Part, Vector, doc, get(name). Assign 'result' to return JSON data; print() output is returned too. |
-
-Runs inside the request: the document is recomputed and new objects are verified afterwards, and the document is not saved if any step fails. Not a sandbox: the code runs with the user's permissions and is not confined to the workspace, and only document changes are rolled back. Prefer regular ops; they validate inputs and explain failures.
-
-```json
-{"op": "python", "code": "b = doc.addObject('Part::Wedge', 'Ramp')\nresult = b.Name"}
 ```
 
 ## Queries

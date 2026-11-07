@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.0.2
+
+A security release: the skill now runs only validated JSON operations. It also adds modelling tools.
+
+### Removed (breaking)
+- The `python` escape-hatch op and its `FCSKILL_ALLOW_PYTHON` switch. It was off by default, but it was
+  general code execution with the user's permissions, which a CAD skill does not need. A request with
+  `"op": "python"` now fails validation (`INVALID_REQUEST`), and the `SCRIPT_ERROR` code is gone.
+- The environment filter added in 2.0.1. It only existed to keep credentials away from `python` op code;
+  without that op, FreeCAD, Gmsh and CalculiX run only the skill's own code and get the normal environment
+  again, as in 2.0.0.
+
+### Added
+- `text`: lettering as a solid (Draft ShapeString, extruded), to engrave (cut) or emboss (fuse). It uses
+  FreeCAD's bundled osifont by default or a `.ttf`/`.otf` file in the workspace, and can be edited with
+  `set` (`text`, `size`, `font`, `align`, `height`).
+- `hole` with `threaded: true`: a modelled ISO metric coarse thread (class 6H) over the hole depth.
+- `import` of meshes (STL, OBJ, 3MF, PLY, OFF) as solids, so that an STL can be cut, fused, measured
+  and exported. Open, non-manifold or self-intersecting meshes are refused, and so are meshes above 20,000
+  triangles (booleans on faceted solids are slow in FreeCAD). `refine` merges coplanar triangles, and
+  `CHECK_UNITS` warns when the size looks like inches or metres.
+- `mirror` of a PartDesign feature mirrors it inside its body (`PartDesign::Mirrored`).
+- `grid_array` of a PartDesign feature: one `MultiTransform` inside the body. It used to be refused.
+
+### Changed
+- Patterning or mirroring a pattern or mirror of a body fails up front, with a hint to name the original
+  feature. FreeCAD can't repeat a repeated feature.
+- SKILL.md tells agents to report unsupported requests instead of writing their own FreeCAD scripts.
+- Shape validity is checked once per shape and request instead of several times, which makes large
+  models (and imported meshes) faster.
+
+### Fixed
+- `fem_static`: `checks.convergence` is now `failed` when refining the mesh changes the result too much
+  (with a `NOT_CONVERGED` or `STRESS_CONCENTRATION` warning). It used to say `passed` whenever the second
+  solve ran.
+
 ## 2.0.1
 
 A security patch addressing the ClawHub security audit findings.

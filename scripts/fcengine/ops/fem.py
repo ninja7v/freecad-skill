@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import FreeCAD as App
 
-from .. import errors, geometry, hostenv, workspace
+from .. import errors, geometry, workspace
 from ..document import Context
 from ..errors import SkillError
 
@@ -138,7 +138,8 @@ def _safe_ccx_class() -> Any:
         def start_ccx(self) -> int:
             self.ccx_stdout = ""
             self.ccx_stderr = ""
-            env = hostenv.child_env(
+            env = dict(
+                os.environ,
                 OMP_NUM_THREADS="1",
                 CCX_NPROC_EQUATION_SOLVER="1",
                 CCX_NPROC_STIFFNESS="1",
@@ -566,10 +567,17 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         "applied_load_n": [geometry.num(x, 3) for x in applied],
         "disclaimer": DISCLAIMER,
     }
-    # Each check is "passed" or "unavailable"/"skipped" (a failed check is an error), so nothing passes unverified.
+    # Each check is "passed", "failed" or "unavailable"/"skipped", so nothing passes unverified. A failed
+    # equilibrium check is an error; a failed convergence check comes with NOT_CONVERGED or STRESS_CONCENTRATION.
+    if conv is None:
+        conv_status = "skipped"
+    elif conv["displacement_change"] > 0.05 or conv["stress_change"] > 0.15:
+        conv_status = "failed"
+    else:
+        conv_status = "passed"
     data["checks"] = {
         "equilibrium": "passed" if final["reaction"] is not None else "unavailable",
-        "convergence": "passed" if conv else "skipped",
+        "convergence": conv_status,
     }
     if final["reaction"] is not None:
         r = final["reaction"]

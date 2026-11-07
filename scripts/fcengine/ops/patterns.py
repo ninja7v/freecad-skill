@@ -1,4 +1,4 @@
-"""Parametric arrays, built on Draft's Array feature."""
+"""Parametric arrays, built on Draft's Array feature (or PartDesign patterns for features of a body)."""
 
 from __future__ import annotations
 

@@ -163,7 +163,7 @@ def _run(req: Dict[str, Any], root: Path, base: Dict[str, Any]) -> Dict[str, Any
 
 # Edits that can disconnect a tool from the feature that consumed it. ('delete'
 # is excluded: exposing the inputs of a deleted feature is the intended effect.)
-ORPHAN_CHECK_OPS = ("set", "python")
+ORPHAN_CHECK_OPS = ("set",)
 
 
 def _intermediates(doc: Any) -> set:

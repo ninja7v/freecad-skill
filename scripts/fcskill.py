@@ -47,7 +47,7 @@ from typing import Any, Dict, List, Optional, Sequence
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from fcengine import __version__, catalog, doclock, errors, hostenv, library, workspace  # noqa: E402
+from fcengine import __version__, catalog, doclock, errors, library, workspace  # noqa: E402
 
 CMD_NAMES = ("freecadcmd", "FreeCADCmd", "freecad.cmd")
 DEFAULT_TIMEOUT = 300
@@ -259,7 +259,6 @@ def _doc_rel(request: Any) -> str:
 def run_inprocess(request: Any, root: Path) -> Dict[str, Any]:
     from fcengine import runner
 
-    hostenv.scrub_process_env()  # FreeCAD runs in this process: keep credentials out of its reach
     sys.stdout.flush()
     saved = os.dup(1), os.dup(2)
     devnull = os.open(os.devnull, os.O_WRONLY)
@@ -339,7 +338,7 @@ def run_subprocess(backend: Backend, request: Any, root: Path, timeout: float) -
             f"import sys; sys.path.insert(0, {str(engine_parent)!r}); from fcengine.runner import main_from_files; "
             f"main_from_files({str(req_file)!r}, {str(resp_file)!r}, {str(run_root)!r})"
         )
-        env = hostenv.child_env()  # without credentials: FreeCAD needs none
+        env = dict(os.environ)
         try:
             proc = _run_tree(backend.cmd + ["-c", boot], env, run_root, timeout)
         except subprocess.TimeoutExpired:

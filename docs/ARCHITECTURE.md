@@ -31,13 +31,12 @@ agent ◄──JSON── response file → stdout
 **JSON operations, not generated Python.** LLMs write plausible FreeCAD Python that fails in subtle ways:
 API differences between versions, topological naming, wrong placement semantics. A small, validated
 vocabulary allows typo detection before execution, uniform verification after each step, and errors written
-for the agent. The cost is expressiveness. The catalog grows where real use shows gaps; an opt-in scripting
-escape hatch is a candidate for later.
+for the agent. The cost is expressiveness. The catalog grows where real use shows gaps.
 
-**An opt-in escape hatch.** The `python` op exists for the long tail that no op covers. An agent with shell
-access could run FreeCAD Python anyway, so the op adds no capability. What it adds is that such code runs
-inside the request: recomputed, verified, and rolled back on failure. It is off by default
-(`FCSKILL_ALLOW_PYTHON=1`), so users who want "structured ops only" keep that guarantee.
+**No scripting escape hatch.** Versions 2.0.0 and 2.0.1 had an opt-in `python` op for the long tail that no op
+covers. It was removed in 2.0.2: general code execution is the main thing security reviews flag in a CAD
+skill, and "the skill runs only validated operations" is a stronger guarantee than "off by default". Gaps are
+filled with new ops instead.
 
 **One CLI tool, not many tools or an MCP server.** OpenClaw skills drive tools through the shell, so a single
 command with a `describe` subcommand is the simplest thing that works everywhere. It needs no daemon and no

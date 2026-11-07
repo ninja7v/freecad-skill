@@ -285,7 +285,7 @@ class Context:
                 hint=FAILURE_HINTS.get(obj.TypeId, "Check the inputs' positions and sizes with inspect."),
                 details={"bbox": geometry.bbox(shape)},
             )
-        if not shape.isValid():
+        if not geometry.is_valid(shape):
             hint = FAILURE_HINTS.get(obj.TypeId, "Check for self-intersections or degenerate inputs.")
             if obj.TypeId in ("Part::Fillet", "Part::Chamfer", "PartDesign::Fillet", "PartDesign::Chamfer"):
                 hint += _edge_size_hint(obj)

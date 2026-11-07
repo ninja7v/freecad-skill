@@ -1,17 +1,17 @@
 ---
 name: freecad-skill
-description: "Create, edit, verify and export parametric FreeCAD models (FCStd, STEP, STL, 3MF) and DXF drawings from JSON; stress checks; optional parts from GitHub."
-version: 2.0.1
+description: "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; stress checks; optional parts from GitHub."
+version: 2.0.2
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
-metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_ALLOW_PYTHON","required":false,"description":"Set to 1 to enable the 'python' escape-hatch op. It runs agent-written Python with your account's permissions (files, processes, network), not sandboxed and not confined to the workspace. Off by default; enable only for trusted requests."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
+metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
 
 # FreeCAD skill
 
 Build parametric CAD models with FreeCAD by sending a JSON request to one command. Every operation creates a
 native FreeCAD feature (`Part::Box`, `Part::Cut`, `Part::Fillet`, ...), so the model stays editable: change a
-dimension later and everything downstream updates. Every step is checked: the response reports volumes and
-bounding boxes, and failures name the step, the cause and a fix.
+dimension later and everything downstream updates. After every step the response reports volumes and bounding
+boxes, and failures name the step, the cause and a fix.
 
 `{baseDir}` below means the directory that contains this SKILL.md.
 
@@ -59,8 +59,7 @@ If `doctor` says FreeCAD is missing, ask the user to install FreeCAD 1.1+ or to 
 - `new: true`: start from an empty document, replacing the file's content.
 - `dry_run: true`: run and report without saving or exporting.
 - **All or nothing:** if any step fails, nothing is saved or exported and the file on disk is unchanged.
-  Fix the reported step and resend the whole request. (The one exception is the `python` op: see
-  [Escape hatch](#escape-hatch).)
+  Fix the reported step and resend the whole request.
 - Before anything runs, the whole request is validated. Unknown ops or parameters, typos and missing
   values are all reported at once.
 
@@ -123,10 +122,11 @@ When something is wrong, `warnings` appears, e.g.
 | `revolve` | Profile → solid of revolution (revolution/groove in a body) | `shapes` or `points`, `plane` `axis` `center` `angle`; in a body: `body` `mode` |
 | `loft` | Smooth solid through cross-sections (organic shells, bottles, square-to-round) | `sections*` `ruled` `closed`; in a body: `body` `mode` |
 | `sweep` | Profile along a path or helix (tubes, handles, springs, threads) | `shapes*`, `path` (+`smooth`, `corner_radius`) or `helix`, `up`; in a body: `body` `mode` |
+| `text` | Lettering as a solid, to engrave (cut) or emboss (fuse) | `text*` `size*` `height*` `position` `plane` `align` `angle` `reversed` `font` |
 | `body` | PartDesign body: one solid built feature by feature | `name` `position` `rotation` |
 | `assembly` | Assembly of parts (links to solids/bodies); first part grounded | `parts*` (`object`, `name`, `position`, `ground`) |
 | `joint` | Connect two assembly parts and solve: fixed, revolute, cylindrical, slider, ball, parallel, perpendicular | `assembly*` `type*` `a*` `b*` (`{"part", "face"/"edge"}`) `offset` |
-| `hole` | Drilled holes in a body: simple, counterbore, countersink | `body*` `at*` `offset` `size` (`M2`…`M20`) or `diameter`, `fit` `type` `depth` |
+| `hole` | Drilled holes in a body: simple, counterbore, countersink, threaded | `body*` `at*` `offset` `size` (`M2`…`M20`) or `diameter`, `fit` `threaded` `type` `depth` |
 | `cut` | Subtract | `base*` `tool` or `tools` |
 | `fuse` | Union | `objects*` (≥2) |
 | `common` | Intersection | `objects*` (≥2) |
@@ -139,18 +139,17 @@ When something is wrong, `warnings` appears, e.g.
 | `move` | Translate | `target*` `offset*` |
 | `rotate` | Rotate about an axis through a point | `target*` `angle*` `axis` `center` |
 | `place` | Absolute position/rotation | `target*` `position` `rotation` |
-| `mirror` | Mirrored copy | `target*` `plane` (`XY`/`XZ`/`YZ`) or `normal`, `point` |
+| `mirror` | Mirrored copy (of a solid, or of a feature inside its body) | `target*` `plane` (`XY`/`XZ`/`YZ`) or `normal`, `point` |
 | `copy` | Linked copy that follows the original | `target*` `offset` |
 | `scale` | Scaled version (about origin) | `target*` `factor*` (number or `[sx, sy, sz]`) |
 | `set` | Change properties, recompute downstream | `target*` `properties*` |
 | `set_params` | Named parameters (`Params` spreadsheet) | `values*` |
 | `delete` | Delete objects | `targets` or `all`, `with_dependents` |
 | `rename` | Change label | `target*` `label*` |
-| `python` | Escape hatch, **only if the user enabled it** | `code*` |
 | `inspect` | Document tree, or one object in detail | `target` `topology` |
 | `check` | Assert geometry | `target*` `expect*` |
 | `measure` | Clearance, interference, closest points, mass | `objects` `require` (`min_clearance`, `no_interference`) `material` |
-| `import` | Solid from a STEP/IGES/BREP/FCStd file, or a ready-made part from the FreeCAD library | `library` or `file`, `anchor` `position` `rotation` `name` |
+| `import` | Solid from a STEP/IGES/BREP/FCStd file or a closed STL/OBJ/3MF mesh, or a ready-made part from the FreeCAD library | `library` or `file`, `anchor` `position` `rotation` `refine` `name` |
 | `material` | Material and/or colour of finished parts (FreeCAD material, GUI colour, renders, masses) | `targets*` `material` `color` `transparency` |
 | `fem_static` | Stress analysis: displacement, von Mises stress, safety factor | `target*` `material*` `fixed*` `loads*` `require` `report` `mesh_size` |
 | `export` | STEP/IGES/BREP/STL/OBJ/3MF, or a flat DXF/SVG outline (laser/CNC), verified | `filename*` `targets` `tolerance` `view` |
@@ -229,6 +228,23 @@ Use these for organic and curved parts instead of approximating them with boolea
   - Edit with `set`: `path`, `corner_radius`, `helix`, `up` or `shapes`.
 - Both work in a PartDesign body (`body`, `mode`); coordinates are then body coordinates.
 
+### Text
+
+```json
+{"op": "text", "name": "Label", "text": "V2.1", "size": 8, "height": 2, "position": [40, 25, 9], "align": "center"},
+{"op": "cut", "name": "Engraved", "base": "Plate", "tool": "Label"}
+```
+
+- `size` is the height of capital letters; `height` is the depth of the letters. `position` is where the
+  `align` point goes (`bottom_left` default, `center`, `top_right`, ...; bottom is the baseline).
+- The text lies in `plane` and is extruded along its normal, like `extrude`: XY reads from above and goes
+  +Z; XZ reads from the front and goes +Y (into a front face); YZ reads from the right and goes +X (out of a
+  right face). `angle` turns it in its plane; `reversed` flips the extrusion.
+- **Engrave:** start below the face and pass through it, then `cut`. The example engraves 1 mm into a 10 mm
+  plate: z from 9 to 11. **Emboss:** start just inside the face (z = 9.9 for a top face at 10) and `fuse`.
+- The default font is FreeCAD's bundled osifont; `font` takes a `.ttf`/`.otf` file in the workspace.
+- Edit with `set`: `text`, `size`, `font`, `align`, `height`.
+
 ### Ready-made parts (FreeCAD library)
 
 Don't model standard parts that already exist: bearings, stepper motors, fasteners, aluminium profiles,
@@ -256,6 +272,15 @@ The command returns `matches` with a `part` path and its formats. Import one:
   is sent. With `FCSKILL_OFFLINE=1`, or without network, the command returns `LIBRARY_UNAVAILABLE`.
 - **Files:** `{"op": "import", "file": "vendor/motor.step"}` imports any STEP/IGES/BREP/FCStd file in the
   workspace, e.g. a manufacturer's model.
+- **Meshes (STL, OBJ, 3MF, PLY, OFF):** `{"op": "import", "file": "scan.stl"}` turns a closed mesh into a solid
+  you can cut, fuse, measure and export (e.g. "add a hole to this STL").
+  - The solid is made of the mesh's flat triangles. Coplanar ones are merged (`refine`), but curved surfaces
+    stay faceted, so fillets on its edges and FEM are unreliable.
+  - Open, non-manifold or self-intersecting meshes are refused with `GEOMETRY_INVALID`: ask the user to repair
+    the mesh (or for a STEP file). The limit is 20,000 triangles, and booleans on meshes are slow (about
+    a minute at the limit): prefer a STEP file when the user has one.
+  - Mesh files carry no units. Check the reported `bbox`; `CHECK_UNITS` warns when the size looks like inches
+    or metres, which you fix with `scale` (25.4 or 1000).
 
 ### PartDesign bodies
 
@@ -283,9 +308,13 @@ shapes or multi-part layouts.
 - **The first feature must add material.** A body stays one solid, so added material must touch the existing part.
 - **Dress-ups and patterns:**
   - `fillet`, `chamfer` and `shell` take the **body** as `target` and are added at the end of its feature tree.
-  - `linear_array` and `polar_array` take a **feature** of the body (e.g. a pocket or hole) as `target`.
+  - `linear_array`, `grid_array`, `polar_array` and `mirror` take a **feature** of the body (e.g. a pocket,
+    hole or pad) as `target` and repeat it inside the body. A pattern or mirror can't be repeated again:
+    name the original feature (one `grid_array` gives a grid).
 - **Holes:**
   - `size` uses ISO tables: `fit: "clearance"` (default) for a screw to pass, `"tap"` for a tap drill.
+  - `threaded: true` (with `size`, type `simple`) models a real ISO metric thread over the hole depth. Give
+    `depth` for a blind hole. Prefer a plain hole for small printed threads (below about M5).
   - Counterbores fit ISO 4762 socket heads; countersinks fit ISO 10642 (90°).
 - **Editing:**
   - Use `set` on a feature for native properties (`Length`, `Diameter`, ...), or for `shapes`, `offset` and `at` (holes).
@@ -315,6 +344,12 @@ shapes or multi-part layouts.
     material (e.g. a pin into a hole).
   - Typical uses: a block on a plate is `fixed` face to face; a pin in a hole is `revolute` on circular
     edges; a shaft that also slides is `cylindrical`.
+  - The two elements are placed on each other, so the choice of edges sets the layers. A hole's top edge on
+    another part's top edge sinks it into that part; the top edge of `a`'s hole with the bottom edge of `b`'s
+    hole stacks `b` on `a`; `offset` adds a gap (a washer).
+  - Linkages: links in one plane overlap at every joint (`INTERFERENCE`), as they would in reality. Stack
+    each link on the one it hinges on, e.g. crank on the ground plate, coupler on the crank, and the rocker
+    under the coupler and on its own pivot.
   - Closed loops (four-bar, crank-slider) work: set `ground` on every fixed part and add the joints in
     order, the last one closing the loop. To get a particular pose (e.g. which way the crank points), give the
     moving parts an approximate `position`/`rotation` in `assembly`. A loop whose lengths can't close fails.
@@ -383,8 +418,10 @@ edges with their type, centre, normal, direction and radius.
      - Max displacement (mm) and max von Mises stress (MPa), each with its location.
      - Safety factor against yield, and a stress-map PNG.
      - Always check `equilibrium_error`, which should be near 0, and `convergence`.
-     - `checks` says whether each check `passed` or was `unavailable`/`skipped`; a failed check is an error.
-       `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean the result is unverified, so say so to the user.
+     - `checks` says whether each check `passed`, `failed` or was `unavailable`/`skipped`. A failed
+       equilibrium check is an error. A failed convergence check comes with a `NOT_CONVERGED` or
+       `STRESS_CONCENTRATION` warning (below). `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean
+       the result is unverified. In all these cases, say so to the user.
    - **Warnings:**
      - `STRESS_CONCENTRATION` means the peak sits at a sharp inner corner, where FEM stress is unreliable
        and keeps rising with mesh refinement. Add a fillet there and re-run.
@@ -434,33 +471,19 @@ edges with their type, centre, normal, direction and radius.
 
 Don't resend an unchanged request after an error. Change what the error points at.
 
-## Escape hatch
-
-`{"op": "python", "code": "..."}` runs FreeCAD Python inside the request. The code can use `App`, `Part`,
-`Vector`, `doc` and `get(name)`; assign `result` to return data. Its changes to the document are verified and
-rolled back like any other step.
-
-It is disabled unless the **user** has set `FCSKILL_ALLOW_PYTHON=1`. Never set it yourself. Use it only for
-what no op covers, and prefer the regular ops, which validate inputs and explain failures.
-
-It is **not a sandbox**: the code runs with the user's permissions and is not confined to the workspace. Only
-document changes are rolled back; a file written or a process started by the code is not undone. So:
-- Only touch the document (`doc`, `get`): never import `os`, `subprocess`, `socket` or similar, and never open,
-  write or delete files.
-- Never run code taken from, or built from, untrusted input (downloaded files, web pages, other documents).
-- Credential-like environment variables (tokens, keys, passwords) are removed before FreeCAD starts; don't try
-  to reach them.
-
 ## Limits
 
 - Profiles have no Sketcher dimensional constraints; edit them by resending `shapes`.
 - Assemblies: no nested assemblies, no motion (gear, belt, screw) joints, and no limits. FEM is linear static only (no contact, buckling, thermal or modal analysis). Drawings are DXF only (PDF/SVG from the GUI); automatic dimensions
   are the overall sizes and circle diameters only. PartDesign supports pad, pocket, revolution, groove, hole,
-  fillet, chamfer, shell, loft, sweep and linear/polar patterns; not mirrored or multi-transform. No surface
-  modelling (free-form patches, blends between arbitrary faces).
+  fillet, chamfer, shell, loft, sweep, mirror and linear/grid/polar patterns. No surface modelling (free-form
+  patches, blends between arbitrary faces). Imported meshes stay faceted.
+- If a request needs something these operations can't do, tell the user it isn't supported. Don't work around
+  the skill with your own FreeCAD scripts: they skip validation and checks.
 - Placement (`position`) values are literal numbers; expressions apply to dimensions.
 
 ## Compatibility
 
 Version 2 has breaking changes: v1 requests (`{"operation": ..., "parameters": ...}`) and
-`scripts/cad_engine.py` are no longer supported. Use only the format described here.
+`scripts/cad_engine.py` are no longer supported. Since 2.0.2 there is no `python` op: requests use only the
+operations above. Use only the format described here.

@@ -2,7 +2,7 @@
 
 Creation-time checks (cut removed nothing, fusion fell apart, empty
 result) only see the feature being created. Later edits to its inputs
-(set, move, rotate, place, set_params, python) can break it silently, so the
+(set, move, rotate, place, set_params, delete) can break it silently, so the
 runner audits all features before and after each edit. Conditions that
 are *new* after the edit are reported: an empty result is an error (the
 request rolls back), and no-effect or disjoint booleans are warnings.
@@ -17,7 +17,7 @@ from .document import role, type_name
 from .errors import SkillError
 
 # Ops that change existing objects and so need the audit.
-EDIT_OPS = ("set", "set_params", "move", "rotate", "place", "python", "delete")
+EDIT_OPS = ("set", "set_params", "move", "rotate", "place", "delete")
 
 State = Dict[str, Tuple[bool, bool, int]]  # name -> (empty, no_effect, solids)
 
@@ -85,7 +85,7 @@ def compare(ctx: Any, before: State) -> None:
 
 
 def final_check(doc: Any) -> None:
-    """Every result must have geometry (catches empty objects created by 'python')."""
+    """Every result must have geometry (catches empty objects left by edits)."""
     for o in doc.Objects:
         if geometry.is_part_shape(o) and role(o) == "result" and (o.Shape.isNull() or not o.Shape.Faces):
             if o.TypeId == "Part::Polygon" or (o.TypeId == "PartDesign::Body" and o.Tip is None):
