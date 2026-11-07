@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.0.2
+
+A security release: the skill now runs only validated JSON operations.
+
+### Removed (breaking)
+- The `python` escape-hatch op and its `FCSKILL_ALLOW_PYTHON` switch. It was off by default, but it was
+  general code execution with the user's permissions, which a CAD skill does not need. A request with
+  `"op": "python"` now fails validation (`INVALID_REQUEST`), and the `SCRIPT_ERROR` code is gone.
+- The environment filter added in 2.0.1. It only existed to keep credentials away from `python` op code;
+  without that op, FreeCAD, Gmsh and CalculiX run only the skill's own code and get the normal environment
+  again, as in 2.0.0.
+
+### Fixed
+- `fem_static`: `checks.convergence` is now `failed` when refining the mesh changes the result too much
+  (with a `NOT_CONVERGED` or `STRESS_CONCENTRATION` warning). It used to say `passed` whenever the second
+  solve ran.
+
 ## 2.0.1
 
 A security patch addressing the ClawHub security audit findings.

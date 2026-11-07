@@ -39,10 +39,6 @@ Risk: Library parts are downloaded from GitHub and are licensed CC-BY 3.0.
 
 Mitigation: Network is used only by the library command and by import steps that name a library part. URLs are allow-listed to the official FreeCAD/FreeCAD-library repository on api.github.com and raw.githubusercontent.com (redirects elsewhere are refused); requests are anonymous GETs that send no user data; files are verified against its git hashes and size-capped; FCSKILL_OFFLINE=1 disables network access. Every imported part carries its attribution, which agents are told to pass on.
 
-Risk: The optional `python` op runs agent-written Python with the user's permissions; it is not sandboxed, not confined to the workspace, and only its document changes are rolled back.
-
-Mitigation: It is disabled unless the user sets `FCSKILL_ALLOW_PYTHON=1`; the skill instructs agents never to set it themselves, to touch only the document, and never to run code built from untrusted input. Credential-like environment variables are removed before FreeCAD starts.
-
 ## Reference(s):
 
 - https://clawhub.ai/ninja7v/skills/freecad-skill
@@ -60,7 +56,7 @@ Mitigation: It is disabled unless the user sets `FCSKILL_ALLOW_PYTHON=1`; the sk
 
 ## Skill Version(s):
 
-2.0.1
+2.0.2
 
 ## Ethical Considerations:
 

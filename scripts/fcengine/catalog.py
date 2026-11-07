@@ -1055,23 +1055,6 @@ OPS: List[Op] = [
         },
     ),
     Op(
-        "python",
-        "edit",
-        "Escape hatch: run FreeCAD Python for something no op covers. Disabled unless the user set FCSKILL_ALLOW_PYTHON=1.",
-        (
-            Param(
-                "code",
-                "string",
-                "Python source. Available: App, Part, Vector, doc, get(name). Assign 'result' to return JSON data; print() output is returned too.",
-                required=True,
-            ),
-        ),
-        notes="Runs inside the request: the document is recomputed and new objects are verified afterwards, and the document is not saved if any step fails. "
-        "Not a sandbox: the code runs with the user's permissions and is not confined to the workspace, and only document changes are rolled back. "
-        "Prefer regular ops; they validate inputs and explain failures.",
-        example={"op": "python", "code": "b = doc.addObject('Part::Wedge', 'Ramp')\nresult = b.Name"},
-    ),
-    Op(
         "render",
         "output",
         "Render shaded PNG views of the model for a visual check (headless, no GUI needed). Look at the image to confirm features are where you intended.",

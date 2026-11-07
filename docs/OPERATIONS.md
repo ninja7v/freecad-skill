@@ -558,20 +558,6 @@ Give 'material', 'color' or both. Plastic presets come with a neutral default co
 {"op": "material", "targets": ["Rim"], "material": "aluminium"}
 ```
 
-### `python`
-
-Escape hatch: run FreeCAD Python for something no op covers. Disabled unless the user set FCSKILL_ALLOW_PYTHON=1.
-
-| Param | Type | Required | Default | Constraints | Description |
-|---|---|---|---|---|---|
-| `code` | string | **yes** |  |  | Python source. Available: App, Part, Vector, doc, get(name). Assign 'result' to return JSON data; print() output is returned too. |
-
-Runs inside the request: the document is recomputed and new objects are verified afterwards, and the document is not saved if any step fails. Not a sandbox: the code runs with the user's permissions and is not confined to the workspace, and only document changes are rolled back. Prefer regular ops; they validate inputs and explain failures.
-
-```json
-{"op": "python", "code": "b = doc.addObject('Part::Wedge', 'Ramp')\nresult = b.Name"}
-```
-
 ## Queries
 
 ### `inspect`

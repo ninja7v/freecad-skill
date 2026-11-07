@@ -740,27 +740,6 @@ class PostEditAuditTests(EngineCase):
         r = self.run_ok([{"op": "set", "target": "A", "properties": {"Height": 12}}], new=False)
         self.assertNotIn("warnings", r)  # already disjoint before this edit: no repeat
 
-    def test_python_cannot_save_empty_objects(self):
-        import os
-
-        os.environ["FCSKILL_ALLOW_PYTHON"] = "1"
-        try:
-            self.run_err([{"op": "python", "code": "doc.addObject('Part::Feature', 'Empty')"}], "EMPTY_RESULT")
-            self.run_err(
-                [
-                    {
-                        "op": "python",
-                        "code": "f = doc.addObject('Part::Feature', 'Bad')\n"
-                        "f.Shape = Part.makeBox(10, 10, 10).cut(Part.makeBox(100, 100, 100, Vector(-50, -50, -50)))",
-                    }
-                ],
-                "EMPTY_RESULT",
-            )
-            r = self.run_ok([{"op": "python", "code": "p = doc.addObject('Part::Plane', 'Sheet')"}])
-            self.assertIn("Sheet", [x["name"] for x in r["results"]])  # a face is legitimate geometry
-        finally:
-            os.environ.pop("FCSKILL_ALLOW_PYTHON", None)
-
     def test_overlapping_results_warned_once_per_request(self):
         r = self.run_ok(
             [
@@ -1554,6 +1533,8 @@ class FemTests(EngineCase):
         self.assertEqual(d["reaction_n"], [0.0, 0.0, 1000.0])
         self.assertLess(d["convergence"]["displacement_change"], 0.01)
         self.assertGreater(d["convergence"]["nodes"][1], d["convergence"]["nodes"][0])
+        warned = {"NOT_CONVERGED", "STRESS_CONCENTRATION"} & {w["code"] for w in r.get("warnings", [])}
+        self.assertEqual(d["checks"]["convergence"], "failed" if warned else "passed")
         self.assertAlmostEqual(d["safety_factor"], 355 / d["max_von_mises_mpa"], places=2)
         self.assertTrue((self.ws / "beam.png").exists())
         self.assertFalse(r["saved"] and any(x["name"] != "Beam" for x in r["results"]))  # no FEM objects left
@@ -2154,47 +2135,11 @@ class RenderTests(EngineCase):
         self.run_err([BOX, {"op": "render", "filename": "c.jpg"}], "INVALID_PARAM")
 
 
-class ScriptTests(EngineCase):
-    def setUp(self):
-        super().setUp()
-        import os
-
-        self._env = os.environ.pop("FCSKILL_ALLOW_PYTHON", None)
-
-    def tearDown(self):
-        import os
-
-        os.environ.pop("FCSKILL_ALLOW_PYTHON", None)
-        if self._env is not None:
-            os.environ["FCSKILL_ALLOW_PYTHON"] = self._env
-        super().tearDown()
-
-    def test_disabled_by_default(self):
-        err = self.run_err([{"op": "python", "code": "result = 1"}], "UNSUPPORTED")
-        self.assertIn("FCSKILL_ALLOW_PYTHON", err["hint"])
-
-    def test_enabled(self):
-        import os
-
-        os.environ["FCSKILL_ALLOW_PYTHON"] = "1"
-        r = self.run_ok(
-            [
-                BOX,
-                {
-                    "op": "python",
-                    "code": "w = doc.addObject('Part::Wedge', 'Ramp')\nprint('made', w.Name)\nresult = {'len': get('B').Length.Value}",
-                    "expect": {"solids": 1},
-                },
-                {"op": "cut", "name": "R", "base": "B", "tool": "Ramp"},
-            ]
-        )
-        data = r["steps"][1]["data"]
-        self.assertEqual(data["created"], ["Ramp"])
-        self.assertEqual(data["result"], {"len": 10.0})
-        self.assertIn("made Ramp", data["output"])
-        err = self.run_err([{"op": "python", "code": "x = 1\nraise ValueError('nope')"}], "SCRIPT_ERROR")
-        self.assertIn("line 2", err["message"])
-        self.run_err([{"op": "python", "code": "def ("}], "SCRIPT_ERROR")
+class RemovedPythonOpTests(EngineCase):
+    def test_python_op_is_gone(self):
+        # Removed in 2.0.2: requests can only use the verified operations.
+        err = self.run_err([{"op": "python", "code": "result = 1"}], "INVALID_REQUEST")
+        self.assertIn("python", json.dumps(err))
 
 
 class V2ExampleTests(EngineCase):

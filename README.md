@@ -165,10 +165,7 @@ an enclosure, a flanged bushing, a wheel, an L-bracket and a table. Each one ass
   never for arbitrary URLs. Downloads are checked against the repository's git hashes, capped at 60 MB and
   cached in the workspace (`.fcskill/library`). `FCSKILL_OFFLINE=1` forbids all network access;
   `FCSKILL_LIBRARY` uses a local clone instead. FreeCAD itself runs offline.
-- The skill runs no agent-written Python unless you opt in with
-  `FCSKILL_ALLOW_PYTHON=1`, which enables the `python` escape-hatch op for cases the operations don't cover.
-  **With it enabled, the workspace confinement above no longer holds:** that code can read and write
-  anywhere your user account can. Enable it only for agents and inputs you trust.
+- The skill never runs agent-written code: requests are JSON operations, validated before anything runs.
 
 ## Limitations
 
@@ -215,8 +212,8 @@ To add an operation:
 
 ```bash
 python3 tests/run.py                                   # everything green first
-clawhub skill publish . --version 2.0.1 --dry-run      # check what will be uploaded
-clawhub skill publish . --version 2.0.1 \
+clawhub skill publish . --version 2.0.2 --dry-run      # check what will be uploaded
+clawhub skill publish . --version 2.0.2 \
   --categories development,creative --topics cad,freecad,3d-printing,step,parametric
 clawhub scan --slug freecad-skill                      # read the security report
 ```

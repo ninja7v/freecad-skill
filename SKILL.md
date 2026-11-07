@@ -1,17 +1,17 @@
 ---
 name: freecad-skill
 description: "Create, edit, verify and export parametric FreeCAD models (FCStd, STEP, STL, 3MF) and DXF drawings from JSON; stress checks; optional parts from GitHub."
-version: 2.0.1
+version: 2.0.2
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
-metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_ALLOW_PYTHON","required":false,"description":"Set to 1 to enable the 'python' escape-hatch op. It runs agent-written Python with your account's permissions (files, processes, network), not sandboxed and not confined to the workspace. Off by default; enable only for trusted requests."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
+metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
 
 # FreeCAD skill
 
 Build parametric CAD models with FreeCAD by sending a JSON request to one command. Every operation creates a
 native FreeCAD feature (`Part::Box`, `Part::Cut`, `Part::Fillet`, ...), so the model stays editable: change a
-dimension later and everything downstream updates. Every step is checked: the response reports volumes and
-bounding boxes, and failures name the step, the cause and a fix.
+dimension later and everything downstream updates. After every step the response reports volumes and bounding
+boxes, and failures name the step, the cause and a fix.
 
 `{baseDir}` below means the directory that contains this SKILL.md.
 
@@ -59,8 +59,7 @@ If `doctor` says FreeCAD is missing, ask the user to install FreeCAD 1.1+ or to 
 - `new: true`: start from an empty document, replacing the file's content.
 - `dry_run: true`: run and report without saving or exporting.
 - **All or nothing:** if any step fails, nothing is saved or exported and the file on disk is unchanged.
-  Fix the reported step and resend the whole request. (The one exception is the `python` op: see
-  [Escape hatch](#escape-hatch).)
+  Fix the reported step and resend the whole request.
 - Before anything runs, the whole request is validated. Unknown ops or parameters, typos and missing
   values are all reported at once.
 
@@ -146,7 +145,6 @@ When something is wrong, `warnings` appears, e.g.
 | `set_params` | Named parameters (`Params` spreadsheet) | `values*` |
 | `delete` | Delete objects | `targets` or `all`, `with_dependents` |
 | `rename` | Change label | `target*` `label*` |
-| `python` | Escape hatch, **only if the user enabled it** | `code*` |
 | `inspect` | Document tree, or one object in detail | `target` `topology` |
 | `check` | Assert geometry | `target*` `expect*` |
 | `measure` | Clearance, interference, closest points, mass | `objects` `require` (`min_clearance`, `no_interference`) `material` |
@@ -383,8 +381,10 @@ edges with their type, centre, normal, direction and radius.
      - Max displacement (mm) and max von Mises stress (MPa), each with its location.
      - Safety factor against yield, and a stress-map PNG.
      - Always check `equilibrium_error`, which should be near 0, and `convergence`.
-     - `checks` says whether each check `passed` or was `unavailable`/`skipped`; a failed check is an error.
-       `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean the result is unverified, so say so to the user.
+     - `checks` says whether each check `passed`, `failed` or was `unavailable`/`skipped`. A failed
+       equilibrium check is an error. A failed convergence check comes with a `NOT_CONVERGED` or
+       `STRESS_CONCENTRATION` warning (below). `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean
+       the result is unverified. In all these cases, say so to the user.
    - **Warnings:**
      - `STRESS_CONCENTRATION` means the peak sits at a sharp inner corner, where FEM stress is unreliable
        and keeps rising with mesh refinement. Add a fillet there and re-run.
@@ -434,23 +434,6 @@ edges with their type, centre, normal, direction and radius.
 
 Don't resend an unchanged request after an error. Change what the error points at.
 
-## Escape hatch
-
-`{"op": "python", "code": "..."}` runs FreeCAD Python inside the request. The code can use `App`, `Part`,
-`Vector`, `doc` and `get(name)`; assign `result` to return data. Its changes to the document are verified and
-rolled back like any other step.
-
-It is disabled unless the **user** has set `FCSKILL_ALLOW_PYTHON=1`. Never set it yourself. Use it only for
-what no op covers, and prefer the regular ops, which validate inputs and explain failures.
-
-It is **not a sandbox**: the code runs with the user's permissions and is not confined to the workspace. Only
-document changes are rolled back; a file written or a process started by the code is not undone. So:
-- Only touch the document (`doc`, `get`): never import `os`, `subprocess`, `socket` or similar, and never open,
-  write or delete files.
-- Never run code taken from, or built from, untrusted input (downloaded files, web pages, other documents).
-- Credential-like environment variables (tokens, keys, passwords) are removed before FreeCAD starts; don't try
-  to reach them.
-
 ## Limits
 
 - Profiles have no Sketcher dimensional constraints; edit them by resending `shapes`.
@@ -463,4 +446,5 @@ document changes are rolled back; a file written or a process started by the cod
 ## Compatibility
 
 Version 2 has breaking changes: v1 requests (`{"operation": ..., "parameters": ...}`) and
-`scripts/cad_engine.py` are no longer supported. Use only the format described here.
+`scripts/cad_engine.py` are no longer supported. Since 2.0.2 there is no `python` op: requests use only the
+operations above. Use only the format described here.

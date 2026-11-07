@@ -98,16 +98,23 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _get(url: str, limit: int) -> bytes:
-    _check_url(url)
+def _require_online() -> None:
     if os.environ.get(ENV_OFFLINE) == "1":
         raise _err(
             errors.LIBRARY_UNAVAILABLE,
             "Network access is disabled (FCSKILL_OFFLINE=1)",
             hint=f"Ask the user to unset FCSKILL_OFFLINE, or to set {ENV_LOCAL} to a local clone of the FreeCAD library.",
         )
-    # No cookies, credentials or other headers: a bare anonymous GET.
-    req = urllib.request.Request(url, headers={"User-Agent": f"fcskill/{__version__}", "Accept": "*/*"})
+
+
+USER_AGENT = f"fcskill/{__version__}"
+
+
+def _get(url: str, limit: int) -> bytes:
+    _check_url(url)
+    _require_online()
+    # No cookies, credentials or other headers: a bare anonymous GET of a fixed, allow-listed URL.
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
     opener = urllib.request.build_opener(_SameHostRedirect)
     try:
         with opener.open(req, timeout=60) as resp:  # noqa: S310 - allow-listed https URLs only
