@@ -17,6 +17,7 @@ from fcengine import (  # noqa: E402
     docs,
     errors,
     guidata,
+    hostenv,
     library,
     profiles,
     selectors,
@@ -518,6 +519,60 @@ class LibraryTests(unittest.TestCase):
 
     def test_blob_hash_matches_git(self):
         self.assertEqual(library._blob_sha(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")  # git hash-object
+
+    def test_only_the_freecad_library_is_contacted(self):
+        library._check_url(library.API_TREE)
+        library._check_url(library.RAW + "Mechanical%20Parts/Nut.step")
+        for bad in (
+            "https://example.com/x",
+            "http://raw.githubusercontent.com/FreeCAD/FreeCAD-library/master/x",
+            "https://raw.githubusercontent.com/someone/else/master/x",
+            "https://api.github.com/repos/FreeCAD/FreeCAD-library.evil/x",
+            "https://raw.githubusercontent.com.evil.com/FreeCAD/FreeCAD-library/master/x",
+        ):
+            with self.assertRaises(errors.SkillError, msg=bad):
+                library._check_url(bad)
+
+
+class HostEnvTests(unittest.TestCase):
+    def test_secrets_are_not_passed_to_freecad(self):
+        base = {
+            "PATH": "/usr/bin",
+            "HOME": "/home/u",
+            "PWD": "/w",
+            "DISPLAY": ":0",
+            "XAUTHORITY": "/home/u/.Xauthority",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/bus",
+            "TOKENIZERS_PARALLELISM": "false",
+            "HTTP_PROXY": "http://proxy:8080",
+            "FCSKILL_ALLOW_PYTHON": "1",
+            "GITHUB_TOKEN": "t",
+            "AWS_SECRET_ACCESS_KEY": "s",
+            "OPENAI_API_KEY": "k",
+            "anthropic_api_key": "k",
+            "DB_PASSWORD": "p",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/c.json",
+            "SSH_AUTH_SOCK": "/tmp/agent",
+            "DATABASE_URL": "postgres://user:pw@host/db",
+        }
+        env = hostenv.child_env(base, OMP_NUM_THREADS="1")
+        self.assertEqual(
+            sorted(env),
+            sorted(
+                [
+                    "PATH",
+                    "HOME",
+                    "PWD",
+                    "DISPLAY",
+                    "XAUTHORITY",
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "TOKENIZERS_PARALLELISM",
+                    "HTTP_PROXY",
+                    "FCSKILL_ALLOW_PYTHON",
+                    "OMP_NUM_THREADS",
+                ]
+            ),
+        )
 
 
 class V1FormatTests(unittest.TestCase):

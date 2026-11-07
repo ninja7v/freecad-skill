@@ -402,7 +402,12 @@ def rename(ctx: Context, p: Dict[str, Any]) -> Any:
     new = p["label"]
     for o in visible_objects(ctx.doc):
         if o is not obj and (o.Name == new or o.Label == new):
-            raise SkillError(errors.NAME_CONFLICT, f"'{new}' is already used by another object")
+            raise SkillError(
+                errors.NAME_CONFLICT,
+                f"'{new}' is already used by another object ('{o.Name}')",
+                hint="Steps refer to objects by name or label, so both must be unique: choose another label "
+                "(e.g. a suffix), or give the intermediate object a different name when creating it.",
+            )
     obj.Label = new
     ctx.mutated = True
     return obj

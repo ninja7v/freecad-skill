@@ -45,6 +45,9 @@ LISTED = FORMATS + ("stl",)
 CACHE_DIR = Path(".fcskill") / "library"
 ENV_LOCAL = "FCSKILL_LIBRARY"
 ENV_OFFLINE = "FCSKILL_OFFLINE"
+# The only URLs ever fetched: this repository's index and its raw files. Nothing is sent but the request itself.
+ALLOWED_PREFIXES = (f"https://api.github.com/repos/{REPO}/", RAW)
+ALLOWED_HOSTS = ("api.github.com", "raw.githubusercontent.com")
 
 
 def _err(code: str, msg: str, hint: str = "") -> errors.SkillError:
@@ -79,16 +82,35 @@ def _local_root() -> Optional[Path]:
     return root
 
 
+def _check_url(url: str) -> None:
+    parts = urllib.parse.urlsplit(url)
+    if not url.startswith(ALLOWED_PREFIXES) or parts.scheme != "https" or parts.hostname not in ALLOWED_HOSTS:
+        raise _err(
+            errors.LIBRARY_UNAVAILABLE, f"Refused to contact '{url}': only the FreeCAD library on GitHub is used"
+        )
+
+
+class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to the allowed GitHub URLs."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        _check_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _get(url: str, limit: int) -> bytes:
+    _check_url(url)
     if os.environ.get(ENV_OFFLINE) == "1":
         raise _err(
             errors.LIBRARY_UNAVAILABLE,
             "Network access is disabled (FCSKILL_OFFLINE=1)",
             hint=f"Ask the user to unset FCSKILL_OFFLINE, or to set {ENV_LOCAL} to a local clone of the FreeCAD library.",
         )
+    # No cookies, credentials or other headers: a bare anonymous GET.
     req = urllib.request.Request(url, headers={"User-Agent": f"fcskill/{__version__}", "Accept": "*/*"})
+    opener = urllib.request.build_opener(_SameHostRedirect)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - fixed https URLs only
+        with opener.open(req, timeout=60) as resp:  # noqa: S310 - allow-listed https URLs only
             data = resp.read(limit + 1)
     except urllib.error.HTTPError as e:
         hint = (
@@ -256,8 +278,11 @@ def fetch(root: Path, ref: str, index: Optional[Dict[str, Any]] = None) -> Tuple
     if dest.is_file() and (entry["sha"] is None or _blob_sha(dest.read_bytes()) == entry["sha"]):
         pass  # cached and intact
     elif local is not None:
+        src = (local / repo_path).resolve()
+        if not src.is_file() or not src.is_relative_to(local.resolve()):
+            raise _err(errors.LIBRARY_UNAVAILABLE, f"'{repo_path}' is not a file inside {ENV_LOCAL} ({local})")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local / repo_path, dest)
+        shutil.copyfile(src, dest)
     else:
         if entry.get("size", 0) > MAX_DOWNLOAD:
             raise _err(

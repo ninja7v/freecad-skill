@@ -66,6 +66,7 @@ ALIASES = {
     "pc": "polycarbonate",
     "pmma": "acrylic",
     "plexiglass": "acrylic",
+    "wood_oak": "wood",
 }
 
 

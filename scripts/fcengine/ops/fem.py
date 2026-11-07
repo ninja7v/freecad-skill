@@ -6,8 +6,11 @@ Probed on FreeCAD 1.1 (cantilever 100x10x10 mm steel, 1000 N):
 - A force given as a bare number is interpreted in mN; loads must carry units.
 - CalculiX writes the reaction at the fixed faces to the .dat file, which
   gives an equilibrium check.
-Every run reports equilibrium and mesh convergence (a second solve on a finer
-mesh), so wrong models or meshes are visible instead of plausible-looking.
+Every run checks equilibrium and, unless 'convergence' is false, mesh
+convergence (a second solve on a finer mesh), so wrong models or meshes are
+visible instead of plausible-looking. A check that cannot run (convergence
+turned off, no reaction in the solver output) is reported as a warning, never
+skipped silently.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import FreeCAD as App
 
-from .. import errors, geometry, workspace
+from .. import errors, geometry, hostenv, workspace
 from ..document import Context
 from ..errors import SkillError
 
@@ -135,8 +138,7 @@ def _safe_ccx_class() -> Any:
         def start_ccx(self) -> int:
             self.ccx_stdout = ""
             self.ccx_stderr = ""
-            env = dict(
-                os.environ,
+            env = hostenv.child_env(
                 OMP_NUM_THREADS="1",
                 CCX_NPROC_EQUATION_SOLVER="1",
                 CCX_NPROC_STIFFNESS="1",
@@ -564,6 +566,11 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         "applied_load_n": [geometry.num(x, 3) for x in applied],
         "disclaimer": DISCLAIMER,
     }
+    # Each check is "passed" or "unavailable"/"skipped" (a failed check is an error), so nothing passes unverified.
+    data["checks"] = {
+        "equilibrium": "passed" if final["reaction"] is not None else "unavailable",
+        "convergence": "passed" if conv else "skipped",
+    }
     if final["reaction"] is not None:
         r = final["reaction"]
         data["reaction_n"] = [geometry.num(x, 3) for x in r]
@@ -584,8 +591,19 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
                 hint="Check that loads and fixed faces are what you intend; if they are, re-run (meshing can fail silently).",
                 details={"equilibrium_error": geometry.num(eq, 5)},
             )
+    else:
+        ctx.warn(
+            "NO_EQUILIBRIUM_CHECK",
+            "CalculiX reported no reaction forces, so the result could not be checked for equilibrium: "
+            "treat it as unverified",
+        )
     if conv:
         data["convergence"] = conv
+    else:
+        ctx.warn(
+            "NO_CONVERGENCE_CHECK",
+            "'convergence' is off, so mesh convergence was not checked: the stresses may depend on the mesh size",
+        )
     if final["max_displacement"] > 0.05 * bb.DiagonalLength:
         ctx.warn(
             "LARGE_DEFORMATION",

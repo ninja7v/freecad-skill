@@ -60,9 +60,9 @@ class Param:
             d["default"] = self.default
         if self.choices:
             d["choices"] = list(self.choices)
-        for key in ("gt", "ge", "le", "min_items"):
-            if getattr(self, key) is not None:
-                d[key] = getattr(self, key)
+        for key, value in (("gt", self.gt), ("ge", self.ge), ("le", self.le), ("min_items", self.min_items)):
+            if value is not None:
+                d[key] = value
         if self.expr:
             d["accepts_expression"] = True
         return d
@@ -889,20 +889,9 @@ OPS: List[Op] = [
             ),
             Param(
                 "material",
-                "enum",
-                "Material for mass (g).",
-                choices=(
-                    "pla",
-                    "petg",
-                    "abs",
-                    "nylon",
-                    "aluminium",
-                    "steel",
-                    "stainless_steel",
-                    "brass",
-                    "titanium",
-                    "wood_oak",
-                ),
+                "string",
+                "Material for mass (g): a preset or FreeCAD library material name, as in the 'material' op "
+                "(e.g. 'steel', 'pla', 'rubber'). Without it, materials assigned with 'material' are used.",
             ),
             Param("density", "number", "Explicit density in g/cm3 (instead of 'material').", gt=0),
         ),
@@ -1005,7 +994,8 @@ OPS: List[Op] = [
         ),
         mutates=False,
         notes="Estimates only: linear elastic, small deformations, no contact. Printed plastics are weaker between layers. "
-        "Peak stress at sharp inner corners is mesh-dependent (STRESS_CONCENTRATION warning): add fillets.",
+        "Peak stress at sharp inner corners is mesh-dependent (STRESS_CONCENTRATION warning): add fillets. "
+        "A check that could not run is a warning (NO_CONVERGENCE_CHECK, NO_EQUILIBRIUM_CHECK): the result is then unverified.",
         example={
             "op": "fem_static",
             "target": "Bracket",
@@ -1076,7 +1066,8 @@ OPS: List[Op] = [
                 required=True,
             ),
         ),
-        notes="Runs inside the request: the document is recomputed and new objects are verified afterwards, and nothing is saved if any step fails. "
+        notes="Runs inside the request: the document is recomputed and new objects are verified afterwards, and the document is not saved if any step fails. "
+        "Not a sandbox: the code runs with the user's permissions and is not confined to the workspace, and only document changes are rolled back. "
         "Prefer regular ops; they validate inputs and explain failures.",
         example={"op": "python", "code": "b = doc.addObject('Part::Wedge', 'Ramp')\nresult = b.Name"},
     ),
