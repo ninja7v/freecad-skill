@@ -10,6 +10,12 @@ Probed on FreeCAD 1.1 headless:
   included in Placement1). FreeCAD may flip a frame so the two face each other,
   so "aligned" means collinear axes (|dot| = 1), and Offset1 acts along the
   possibly flipped frame: the skill's 'offset' is converted to "away from side a".
+- Connecting a joint pre-solves: FreeCAD snaps the free part's joint frame onto the
+  other one, which drops any rotation given as a start. A chain built joint by joint
+  therefore ends up in a straight line, a singular start from which a closing joint
+  (four-bar, crank-slider) does not solve, although the loop solves from a bent
+  start. So a failed solve is retried from the parts' start placements, then from
+  the ones before the joint with one part turned slightly about its joint axis.
 """
 
 from __future__ import annotations
@@ -26,6 +32,8 @@ from ..errors import SkillError
 
 JOINT_TYPES = ("fixed", "revolute", "cylindrical", "slider", "ball", "parallel", "perpendicular")
 JOINT_PROP = "FCSkillJoint"
+START_PROP = "FCSkillStart"
+NUDGE_DEG, MAX_NUDGES = 15.0, 8
 TOL_POS, TOL_DOT = 1e-3, 1e-4
 
 
@@ -94,6 +102,11 @@ def assembly(ctx: Context, p: Dict[str, Any]) -> Any:
                 App.Vector(*(spec.get("position") or [0, 0, 0])),
                 App.Rotation(App.Vector(*rot["axis"]), rot["angle"]) if rot else App.Rotation(),
             )
+            link.addProperty(
+                "App::PropertyPlacement", START_PROP, "FCSkill", "Start placement, retried if a solve fails"
+            )
+            link.setEditorMode(START_PROP, 2)
+            setattr(link, START_PROP, link.Placement)
         links.append(link)
     grounded = [link for link, spec in zip(links, p["parts"]) if spec.get("ground")] or links[:1]
     for link in grounded:
@@ -256,18 +269,79 @@ def interferences(asm: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def solve(ctx: Context, asm: Any) -> Dict[str, Any]:
+def _joints(asm: Any) -> List[Any]:
+    return [j for j in _joint_group(asm).Group if getattr(j, "Reference1", None) is not None]
+
+
+def grounded_parts(asm: Any) -> List[Any]:
+    return [g.ObjectToGround for g in _joint_group(asm).Group if getattr(g, "ObjectToGround", None) is not None]
+
+
+def joined_parts(asm: Any) -> List[Any]:
+    """Parts the solver places: grounded or connected by a joint (the others still sit where they were added)."""
+    out = grounded_parts(asm)
+    for j in _joints(asm):
+        out += [j.Reference1[0], j.Reference2[0]]
+    return list({o.Name: o for o in out}.values())
+
+
+def _attempt(ctx: Context, asm: Any) -> Tuple[int, Dict[str, List[str]]]:
+    ground = {o.Name: o.Placement for o in grounded_parts(asm)}
     rc = asm.solve()
     ctx.doc.recompute()
     if rc == 0 and _fix_offsets(asm):
         rc = asm.solve()
         ctx.doc.recompute()
-    problems = {}
-    for j in _joint_group(asm).Group:
-        if hasattr(j, "Reference1") and j.Reference1 is not None:
-            errs = joint_errors(j)
-            if errs:
-                problems[j.Name] = errs
+    problems = {j.Name: errs for j in _joints(asm) for errs in [joint_errors(j)] if errs}
+    # Joint checks are relative: a diverged solve can also move grounded parts (seen on FreeCAD 1.1).
+    for name, plc in ground.items():
+        if not ctx.doc.getObject(name).Placement.isSame(plc, TOL_POS):
+            problems[name] = ["a grounded part was moved"]
+    return rc, problems
+
+
+def _retry_starts(asm: Any, before: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Other start placements for the free parts (see module doc): the start placements given in the
+    'assembly' op; then the placements before the new joint was connected (``before``) with one part
+    turned by +-NUDGE_DEG about its first joint axis (at most MAX_NUDGES starts)."""
+    ground = {o.Name for o in grounded_parts(asm)}
+    free = [link for link in parts_of(asm) if link.Name not in ground]
+    base = {link.Name: before.get(link.Name, link.Placement) for link in free}
+    starts = [
+        dict(base, **{link.Name: getattr(link, START_PROP) for link in free if START_PROP in link.PropertiesList})
+    ]
+    for link in free:
+        frame = None
+        for j in _joints(asm):
+            if int(getattr(j, "FCSkillJointType", 0)) in (1, 2, 4):  # revolute, cylindrical, ball
+                if j.Reference1[0] is link or j.Reference2[0] is link:
+                    frame = base[link.Name].multiply(j.Placement1 if j.Reference1[0] is link else j.Placement2)
+                    break
+        if frame is None:
+            continue
+        axis = frame.Rotation.multVec(App.Vector(0, 0, 1))
+        for sign in (1, -1):
+            turn = App.Placement(App.Vector(), App.Rotation(axis, sign * NUDGE_DEG), frame.Base)
+            starts.append(dict(base, **{link.Name: turn.multiply(base[link.Name])}))
+    if not any(START_PROP in link.PropertiesList for link in free):
+        starts.pop(0)
+    return starts[:MAX_NUDGES]
+
+
+def solve(ctx: Context, asm: Any, before: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Solve and verify every joint; ``before``: part placements before the latest joint was connected."""
+    before = dict({link.Name: link.Placement for link in parts_of(asm)}, **(before or {}))
+    rc, problems = _attempt(ctx, asm)
+    if rc != 0 or problems:
+        first = rc, problems  # reported if no retry works: later ones start from made-up placements
+        for start in _retry_starts(asm, before):
+            for name, plc in dict(before, **start).items():
+                ctx.doc.getObject(name).Placement = plc
+            rc, problems = _attempt(ctx, asm)
+            if rc == 0 and not problems:
+                break
+        else:
+            rc, problems = first
     if rc != 0 or problems:
         raise SkillError(
             errors.RECOMPUTE_FAILED,
@@ -275,7 +349,9 @@ def solve(ctx: Context, asm: Any) -> Dict[str, Any]:
             + (f" (solver code {rc})" if rc != 0 else "")
             + (f": joints not satisfied {problems}" if problems else ""),
             hint="Joints may conflict (over-constrained), or reference geometry that changed. "
-            "Check each joint's faces/edges; a part with too many joints cannot satisfy all of them.",
+            "Check each joint's faces/edges; a part with too many joints cannot satisfy all of them. "
+            "For a closed loop (four-bar, crank-slider), check that its dimensions let it close, and give "
+            "the moving parts an approximate 'position'/'rotation' in the 'assembly' op as a start.",
             details={"solver_code": rc, "unsatisfied": problems},
         )
     return {
@@ -304,16 +380,22 @@ def joint(ctx: Context, p: Dict[str, Any]) -> Any:
     j.addProperty("App::PropertyInteger", "FCSkillJointType", "FCSkill", "Joint type index in the skill")
     j.FCSkillJointType = JOINT_TYPES.index(kind)
     spec = {"a": p["a"], "b": p["b"], "offset": p.get("offset", 0)}
+    before = {link.Name: link.Placement for link in parts_of(asm)}
     _connect(ctx, j, asm, spec)
     j.addProperty(
         "App::PropertyString", JOINT_PROP, "FCSkill", "Joint references as selectors (re-resolved after edits)"
     )
     setattr(j, JOINT_PROP, json.dumps(spec))
-    result = solve(ctx, asm)
-    clashes = interferences(asm)
+    result = solve(ctx, asm, before)
+    # Only parts the solver placed: a part not joined yet still sits where it was added.
+    joined = {o.Name for o in joined_parts(asm)}
+    clashes = [c for c in interferences(asm) if c["a"] in joined and c["b"] in joined]
     for c in clashes:
         ctx.warn("INTERFERENCE", f"'{c['a']}' and '{c['b']}' overlap by {c['overlap_volume']} mm3 after solving")
     result["interferences"] = clashes
+    unjoined = [link.Name for link in parts_of(asm) if link.Name not in joined]
+    if unjoined:
+        result["not_joined"] = unjoined
     return {"object": asm, "data": result}
 
 

@@ -889,20 +889,9 @@ OPS: List[Op] = [
             ),
             Param(
                 "material",
-                "enum",
-                "Material for mass (g).",
-                choices=(
-                    "pla",
-                    "petg",
-                    "abs",
-                    "nylon",
-                    "aluminium",
-                    "steel",
-                    "stainless_steel",
-                    "brass",
-                    "titanium",
-                    "wood_oak",
-                ),
+                "string",
+                "Material for mass (g): a preset or FreeCAD library material name, as in the 'material' op "
+                "(e.g. 'steel', 'pla', 'rubber'). Without it, materials assigned with 'material' are used.",
             ),
             Param("density", "number", "Explicit density in g/cm3 (instead of 'material').", gt=0),
         ),

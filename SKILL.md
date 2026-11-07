@@ -315,11 +315,16 @@ shapes or multi-part layouts.
     material (e.g. a pin into a hole).
   - Typical uses: a block on a plate is `fixed` face to face; a pin in a hole is `revolute` on circular
     edges; a shaft that also slides is `cylindrical`.
+  - Closed loops (four-bar, crank-slider) work: set `ground` on every fixed part and add the joints in
+    order, the last one closing the loop. To get a particular pose (e.g. which way the crank points), give the
+    moving parts an approximate `position`/`rotation` in `assembly`. A loop whose lengths can't close fails.
+  - Selector extremes (`<X`, `>X`) are taken over all edges, so on a link with rounded ends they pick the end
+    arc, not the hole: there, give hole edges by index (`inspect` with `topology: true`).
 - **Checks:**
   - Every joint is verified after solving, so a joint that can't be satisfied, e.g. a conflicting one,
     fails the request.
   - Overlapping parts are reported as `INTERFERENCE` warnings with their overlap volume. Check them with
-    `measure` too.
+    `measure` too. Parts not joined yet are listed in `not_joined` and left out of that check.
 - **After edits:** joints are re-resolved and the assembly re-solved after every edit, so parts follow
   dimension changes.
 

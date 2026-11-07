@@ -1426,6 +1426,19 @@ class MeasureTests(EngineCase):
         )
         self.assertAlmostEqual(r["steps"][-1]["data"]["min_distance"], 0.1, places=4)  # radial clearance
 
+    def test_material_names_as_in_material_op(self):
+        r = self.run_ok(
+            [
+                BOX,
+                {"op": "measure", "objects": ["B"], "material": "rubber"},  # a preset without a library material
+                {"op": "measure", "objects": ["B"], "material": "Aluminum"},  # alias
+            ]
+        )
+        self.assertAlmostEqual(self.step(r, -2)["data"]["mass_g"]["B"], 1.15, places=2)
+        self.assertAlmostEqual(self.step(r, -1)["data"]["mass_g"]["B"], 2.7, places=1)
+        err = self.run_err([BOX, {"op": "measure", "objects": ["B"], "material": "unobtainium"}], "INVALID_PARAM")
+        self.assertIn("Unknown material", err["message"])
+
 
 class DrawingTests(EngineCase):
     PLATE = {
@@ -1729,6 +1742,96 @@ class AssemblyTests(EngineCase):
             self.PARTS + [{"op": "assembly", "parts": [{"object": "Blk"}, {"object": "Blk"}]}], "INVALID_REQUEST"
         )
 
+    @staticmethod
+    def mechanism(coupler=60, pivot_d=True):
+        """Ground plates with a pivot at x=-35 (and x=35), links of 40/``coupler``/40 mm. Link edges
+        (inspect topology): 12/13 bottom of the holes at x=0/x=length, 15/16 their top."""
+        steps = []
+        for name, x0, hx in (("PlateA", -55, -35), ("PlateD", 0, 35))[: 2 if pivot_d else 1]:
+            steps += [
+                {"op": "box", "name": f"{name}Raw", "length": 55, "width": 30, "height": 8, "position": [x0, -15, 0]},
+                {"op": "cylinder", "name": f"{name}H", "radius": 3.2, "height": 20, "position": [hx, 0, -5]},
+                {"op": "cut", "name": name, "base": f"{name}Raw", "tool": f"{name}H"},
+            ]
+        for name, length in (("Crank", 40), ("Coupler", coupler), ("Rocker", 40)):
+            steps += [
+                {
+                    "op": "extrude",
+                    "name": f"{name}Raw",
+                    "height": 8,
+                    "shapes": [{"slot": [[0, 0], [length, 0]], "radius": 6}],
+                },
+                {"op": "cylinder", "name": f"{name}H1", "radius": 3.2, "height": 20, "position": [0, 0, -5]},
+                {"op": "cylinder", "name": f"{name}H2", "radius": 3.2, "height": 20, "position": [length, 0, -5]},
+                {"op": "cut", "name": f"{name}A", "base": f"{name}Raw", "tool": f"{name}H1"},
+                {"op": "cut", "name": name, "base": f"{name}A", "tool": f"{name}H2"},
+            ]
+        return steps
+
+    @staticmethod
+    def hinge(a, a_edge, b, b_edge):
+        return {
+            "op": "joint",
+            "assembly": "Mech",
+            "type": "revolute",
+            "a": {"part": a, a_edge[0]: a_edge[1]},
+            "b": {"part": b, "edge": b_edge},
+        }
+
+    def four_bar(self, coupler=60):
+        top = ("edge", "%CIRCLE and >Z")
+        return self.mechanism(coupler) + [
+            {
+                "op": "assembly",
+                "name": "Mech",
+                "parts": [{"object": "PlateA", "ground": True}, {"object": "PlateD", "ground": True}]
+                + [{"object": n} for n in ("Crank", "Coupler", "Rocker")],
+            },
+            self.hinge("PlateA", top, "Crank", 12),  # crank on the plate: z 8..16
+            self.hinge("Crank", ("edge", 16), "Coupler", 12),  # coupler on the crank: z 16..24
+            self.hinge("Coupler", ("edge", 13), "Rocker", 15),  # rocker under the coupler: z 8..16
+            self.hinge("PlateD", top, "Rocker", 13),  # closes the loop
+        ]
+
+    def test_closed_four_bar_solves(self):
+        """Joint pre-solving leaves the chain straight, a singular start: the skill retries from a bent one."""
+        r = self.run_ok(self.four_bar())
+        self.assertNotIn("warnings", r)
+        doc = App.openDocument(str(self.ws / "t.FCStd"))
+        try:
+
+            def at(link, x):
+                return doc.getObject(link).Placement.multVec(App.Vector(x, 0, 0))
+
+            def same(p, q):
+                self.assertAlmostEqual((p - q).Length, 0, places=3)
+
+            same(at("Crank_Part", 0), App.Vector(-35, 0, 8))
+            same(at("Crank_Part", 40) + App.Vector(0, 0, 8), at("Coupler_Part", 0))
+            same(at("Coupler_Part", 60), at("Rocker_Part", 0) + App.Vector(0, 0, 8))
+            same(at("Rocker_Part", 40), App.Vector(35, 0, 8))
+            self.assertGreater(abs(at("Crank_Part", 40).y), 30)  # a real four-bar pose, not a straight line
+            for plate in ("PlateA_Part", "PlateD_Part"):
+                self.assertTrue(doc.getObject(plate).Placement.isIdentity())  # grounded parts did not move
+        finally:
+            App.closeDocument(doc.Name)
+
+    def test_four_bar_that_cannot_close_fails(self):
+        err = self.run_err(self.four_bar(coupler=160), "RECOMPUTE_FAILED")  # 160 > 40 + 70 + 40
+        self.assertIn("closed loop", err["hint"])
+
+    def test_no_interference_warning_for_parts_not_joined_yet(self):
+        r = self.run_ok(
+            self.mechanism(pivot_d=False)
+            + [
+                {"op": "assembly", "name": "Mech", "parts": [{"object": n} for n in ("PlateA", "Crank", "Coupler")]},
+                self.hinge("PlateA", ("edge", "%CIRCLE and >Z"), "Crank", 12),
+                self.hinge("Crank", ("edge", 16), "Coupler", 12),
+            ]
+        )
+        self.assertNotIn("warnings", r)  # Coupler overlapped the plate before it was joined
+        self.assertEqual(self.step(r, -2)["data"]["not_joined"], ["Coupler_Part"])
+
     def test_measure_compares_parts_as_assembled(self):
         r = self.run_ok(
             self.PARTS
@@ -1744,7 +1847,9 @@ class AssemblyTests(EngineCase):
             self.assertEqual(
                 (pair["a"], pair["b"], pair["status"]), ("Plate_Part", "Pin_Part", "touching")
             )  # pin seated in its bore
-        self.assertAlmostEqual(self.step(r, -2)["data"]["mass_g"]["Pin_Part"], PI * 9 * 30 / 1000 * 7.85, places=2)
+        data = self.step(r, -2)["data"]
+        self.assertAlmostEqual(data["density_g_cm3"], 7.9, places=2)  # FreeCAD's Steel-Generic, as in 'material'
+        self.assertAlmostEqual(data["mass_g"]["Pin_Part"], PI * 9 * 30 / 1000 * data["density_g_cm3"], places=2)
 
 
 class ReservedNameTests(EngineCase):

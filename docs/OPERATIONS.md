@@ -600,7 +600,7 @@ Clearance and interference between objects (minimum distance, closest points, ov
 |---|---|---|---|---|---|
 | `objects` | names |  |  |  | Objects to compare pairwise (default: all result objects). An assembly stands for its parts, measured where they are assembled; name a single part by its link (e.g. Pin_Part). |
 | `require` | object |  |  |  | Assertions that fail the step: {"min_clearance": mm} and/or {"no_interference": true}. |
-| `material` | enum |  |  | `pla` \| `petg` \| `abs` \| `nylon` \| `aluminium` \| `steel` \| `stainless_steel` \| `brass` \| `titanium` \| `wood_oak` | Material for mass (g). |
+| `material` | string |  |  |  | Material for mass (g): a preset or FreeCAD library material name, as in the 'material' op (e.g. 'steel', 'pla', 'rubber'). Without it, materials assigned with 'material' are used. |
 | `density` | number |  |  | > 0 | Explicit density in g/cm3 (instead of 'material'). |
 
 Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0).

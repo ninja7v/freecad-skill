@@ -18,6 +18,16 @@ A security patch addressing the ClawHub security audit findings.
 - `fem_static` warns `NO_CONVERGENCE_CHECK` when `convergence` is off and `NO_EQUILIBRIUM_CHECK` when the
   solver reports no reactions, instead of skipping those checks silently, and its result has a `checks` field
   (`passed`, `skipped` or `unavailable` for each check).
+- `measure` takes the same material names as `material` (every preset, including `rubber`, aliases and
+  FreeCAD library materials), with the same densities: `steel` is now FreeCAD's 7.90 g/cm3 instead of 7.85.
+  `wood_oak` is an alias of `wood`.
+- The `rename` conflict error names the object that already uses the label.
+
+### Fixed
+- Closed-loop assemblies (four-bar, crank-slider) now solve. Joint pre-solving left the chain straight, a
+  start from which the closing joint fails, so a failed solve is retried from the parts' `position`/`rotation`
+  given in `assembly`, then from slightly turned starts. A solve that moves a grounded part counts as failed.
+- `joint` no longer warns `INTERFERENCE` for parts that are not joined yet; they are listed in `not_joined`.
 
 ## 2.0.0
 
