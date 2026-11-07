@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 import re
-import shutil
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -172,10 +172,7 @@ def load_index(root: Path, refresh: bool = False) -> Dict[str, Any]:
         if e.get("type") == "blob" and _ext(e["path"]) in LISTED
     }
     index = {"source": f"https://github.com/{REPO}", "files": files}
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cache.with_suffix(".tmp")
-    tmp.write_text(json.dumps(index), encoding="utf-8")
-    os.replace(tmp, cache)
+    _write_cached(root, cache, json.dumps(index).encode("utf-8"))
     return index
 
 
@@ -258,6 +255,22 @@ def local_path(root: Path, repo_path: str) -> Path:
     return root / CACHE_DIR / "parts" / _safe_rel(repo_path)
 
 
+def _write_cached(root: Path, dest: Path, data: bytes) -> None:
+    """Write a cache file without following links: a link planted in the cache cannot redirect the write."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cache = (root / CACHE_DIR).resolve()
+    if not dest.parent.resolve().is_relative_to(cache):  # a linked folder could point anywhere
+        raise _err(errors.LIBRARY_UNAVAILABLE, f"'{dest.parent}' is not inside the library cache {cache}")
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".part")  # new file, never a link
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, dest)  # replaces the directory entry itself
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
 def attribution(repo_path: str) -> Dict[str, str]:
     name = repo_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     return {
@@ -282,14 +295,17 @@ def fetch(root: Path, ref: str, index: Optional[Dict[str, Any]] = None) -> Tuple
     meta = {"library": repo_path, **attribution(repo_path)}
     entry = index["files"][repo_path]
     local = _local_root()
-    if dest.is_file() and (entry["sha"] is None or _blob_sha(dest.read_bytes()) == entry["sha"]):
+    if (
+        dest.is_file()
+        and not dest.is_symlink()
+        and (entry["sha"] is None or _blob_sha(dest.read_bytes()) == entry["sha"])
+    ):
         pass  # cached and intact
     elif local is not None:
         src = (local / repo_path).resolve()
         if not src.is_file() or not src.is_relative_to(local.resolve()):
             raise _err(errors.LIBRARY_UNAVAILABLE, f"'{repo_path}' is not a file inside {ENV_LOCAL} ({local})")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dest)
+        _write_cached(root, dest, src.read_bytes())
     else:
         if entry.get("size", 0) > MAX_DOWNLOAD:
             raise _err(
@@ -305,12 +321,8 @@ def fetch(root: Path, ref: str, index: Optional[Dict[str, Any]] = None) -> Tuple
                 f"Downloaded '{repo_path}' does not match the library index",
                 hint="The library changed since the index was cached: retry with 'fcskill.py library --refresh'.",
             )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(dest.name + ".part")
-        tmp.write_bytes(data)
-        os.replace(tmp, dest)
-    meta_path = dest.with_name(dest.name + ".json")
-    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        _write_cached(root, dest, data)
+    _write_cached(root, dest.with_name(dest.name + ".json"), json.dumps(meta).encode("utf-8"))
     return dest, meta
 
 

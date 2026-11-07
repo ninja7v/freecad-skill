@@ -1,7 +1,7 @@
 ---
 name: freecad-skill
 description: "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; stress checks; optional parts from GitHub."
-version: 2.0.2
+version: 2.0.3
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
 metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
@@ -421,7 +421,9 @@ edges with their type, centre, normal, direction and radius.
      - `checks` says whether each check `passed`, `failed` or was `unavailable`/`skipped`. A failed
        equilibrium check is an error. A failed convergence check comes with a `NOT_CONVERGED` or
        `STRESS_CONCENTRATION` warning (below). `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean
-       the result is unverified. In all these cases, say so to the user.
+       the result is unverified. Convergence is `unavailable` when the mesh could not be refined enough to
+       compare (`convergence.refined` is false); never report that as converged. In all these cases, say so
+       to the user.
    - **Warnings:**
      - `STRESS_CONCENTRATION` means the peak sits at a sharp inner corner, where FEM stress is unreliable
        and keeps rising with mesh refinement. Add a fillet there and re-run.

@@ -215,8 +215,8 @@ To add an operation:
 
 ```bash
 python3 tests/run.py                                   # everything green first
-clawhub skill publish . --version 2.0.2 --dry-run      # check what will be uploaded
-clawhub skill publish . --version 2.0.2 \
+clawhub skill publish . --version 2.0.3 --dry-run      # check what will be uploaded
+clawhub skill publish . --version 2.0.3 \
   --categories development,creative --topics cad,freecad,3d-printing,step,parametric
 clawhub scan --slug freecad-skill                      # read the security report
 ```

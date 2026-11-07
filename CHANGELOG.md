@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.3
+
+### Fixed
+- FEM mesh convergence could be reported as `passed` when the finer mesh was barely finer than the
+  first one (Gmsh can ignore a size limit the geometry already meets), so two near-identical meshes
+  agreed. If three refinement attempts don't give 30% more nodes, convergence is now `unavailable`, with
+  a `NO_CONVERGENCE_CHECK` warning and `convergence.refined: false`.
+- Library cache writes no longer follow links. A link planted in `.fcskill/library` could redirect a
+  copy or download to a file outside the workspace. Files are now written to a new temporary file and
+  renamed into place, and a cache folder that resolves outside the cache is refused.
+
 ## 2.0.2
 
 A security release: the skill now runs only validated JSON operations. It also adds modelling tools.

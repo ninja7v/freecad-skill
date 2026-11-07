@@ -516,11 +516,13 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         if p["convergence"]:
             # The refined mesh must really be finer: Gmsh may ignore a size limit the geometry already satisfies.
             h_fine = h * 0.7
+            refined = False
             for attempt in range(3):
                 d = os.path.join(work, f"b{attempt}")
                 os.makedirs(d, exist_ok=True)
                 final = _solve(ctx, target, mat, fixed, loads, h_fine, d, keep=False, tag=f"_fine{attempt}")
-                if final["nodes"] > first["nodes"] * 1.3:
+                refined = final["nodes"] > first["nodes"] * 1.3
+                if refined:
                     break
                 h_fine *= 0.7
             if p["keep"]:
@@ -532,13 +534,21 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
                 "nodes": [first["nodes"], final["nodes"]],
                 "displacement_change": geometry.num(dd, 4),
                 "stress_change": geometry.num(ds, 4),
+                "refined": refined,
             }
-            if dd > 0.05:
+            if not refined:
+                # Two nearly identical meshes always agree, so their comparison proves nothing.
+                ctx.warn(
+                    "NO_CONVERGENCE_CHECK",
+                    f"the mesh could not be refined enough to check convergence ({first['nodes']} -> "
+                    f"{final['nodes']} nodes): the result is unverified; give a smaller 'mesh_size'",
+                )
+            elif dd > 0.05:
                 ctx.warn(
                     "NOT_CONVERGED",
                     f"max displacement changed {dd:.1%} when refining the mesh; give a smaller 'mesh_size'",
                 )
-            if ds > 0.15:
+            if refined and ds > 0.15:
                 ctx.warn(
                     "STRESS_CONCENTRATION",
                     f"max stress changed {ds:.1%} when refining the mesh: it is probably at a sharp "
@@ -571,6 +581,8 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
     # equilibrium check is an error; a failed convergence check comes with NOT_CONVERGED or STRESS_CONCENTRATION.
     if conv is None:
         conv_status = "skipped"
+    elif not conv["refined"]:
+        conv_status = "unavailable"
     elif conv["displacement_change"] > 0.05 or conv["stress_change"] > 0.15:
         conv_status = "failed"
     else:

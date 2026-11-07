@@ -516,6 +516,42 @@ class LibraryTests(unittest.TestCase):
                     else:
                         os.environ[k] = v
 
+    def test_planted_links_cannot_redirect_cache_writes(self):
+        with (
+            tempfile.TemporaryDirectory() as clone,
+            tempfile.TemporaryDirectory() as ws,
+            tempfile.TemporaryDirectory() as out,
+        ):
+            part = Path(clone) / "Mechanical Parts" / "Nut_M3.step"
+            part.parent.mkdir(parents=True)
+            part.write_text("ISO-10303-21;")
+            victim = Path(out) / "victim.txt"
+            victim.write_text("keep")
+            old = os.environ.get(library.ENV_LOCAL)
+            try:
+                os.environ[library.ENV_LOCAL] = clone
+                index = library.load_index(Path(ws))
+                dest = library.local_path(Path(ws), "Mechanical Parts/Nut_M3.step")
+                dest.parent.mkdir(parents=True)
+                dest.symlink_to(victim)  # a link to a file outside: replaced by the part, victim untouched
+                library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index)
+                self.assertFalse(dest.is_symlink())
+                self.assertEqual(dest.read_text(), "ISO-10303-21;")
+                self.assertEqual(victim.read_text(), "keep")
+                for p in dest.parent.iterdir():
+                    p.unlink()
+                dest.parent.rmdir()
+                dest.parent.symlink_to(out, target_is_directory=True)  # a linked folder: refused
+                with self.assertRaises(errors.SkillError) as cm:
+                    library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index)
+                self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
+                self.assertEqual(sorted(p.name for p in Path(out).iterdir()), ["victim.txt"])
+            finally:
+                if old is None:
+                    os.environ.pop(library.ENV_LOCAL, None)
+                else:
+                    os.environ[library.ENV_LOCAL] = old
+
     def test_blob_hash_matches_git(self):
         self.assertEqual(library._blob_sha(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")  # git hash-object
 

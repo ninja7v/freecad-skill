@@ -1,6 +1,6 @@
 {
   "name": "freecad-skill",
   "description": "Create, edit, inspect, verify and export parametric FreeCAD models from structured JSON",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "entry_point": "python3 scripts/fcskill.py run"
 }
