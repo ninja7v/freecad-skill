@@ -10,19 +10,6 @@ from ..document import Context, role, visible_objects
 from ..errors import SkillError
 from . import assembly
 
-# g/cm3
-DENSITIES = {
-    "pla": 1.24,
-    "petg": 1.27,
-    "abs": 1.04,
-    "nylon": 1.14,
-    "aluminium": 2.70,
-    "steel": 7.85,
-    "stainless_steel": 8.00,
-    "brass": 8.50,
-    "titanium": 4.43,
-    "wood_oak": 0.75,
-}
 MAX_OBJECTS = 30
 TOUCH = 1e-6
 
@@ -98,7 +85,7 @@ def measure(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         data["min_distance"] = min(x["distance"] for x in pairs)
         data["interferences"] = sum(1 for x in pairs if x["status"] == "interfering")
     if "material" in p or "density" in p:
-        rho = float(p["density"]) if "density" in p else DENSITIES[p["material"]]
+        rho = float(p["density"]) if "density" in p else _material_density(p["material"])
         data["mass_g"] = {o.Name: geometry.num(o.Shape.Volume / 1000.0 * rho, 2) for o in objs}  # mm3 -> cm3
         data["density_g_cm3"] = rho
     elif any(o.density for o in objs):  # materials assigned with the 'material' op
@@ -134,6 +121,20 @@ def measure(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
     if len(objs) < 2 and "mass_g" not in data:
         ctx.warn("NOTHING_TO_COMPARE", "fewer than two objects: give 'objects', or add a material to get masses")
     return {"data": data}
+
+
+def _material_density(name: str) -> float:
+    """g/cm3 of a material preset or FreeCAD library material (the same names as the 'material' op)."""
+    from . import material
+
+    rho = material.resolve(name, material._library())["density"]
+    if not rho:
+        raise SkillError(
+            errors.INVALID_PARAM,
+            f"Material '{name}' has no density",
+            hint="Give 'density' in g/cm3 instead.",
+        )
+    return rho
 
 
 HANDLERS = {"measure": measure}

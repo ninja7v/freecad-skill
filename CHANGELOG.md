@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.0.1
+
+A security patch addressing the ClawHub security audit findings.
+
+### Security
+- FreeCAD (and Gmsh, CalculiX and the `python` op under it) now runs without credential-like environment
+  variables (tokens, keys, passwords, credentials in URLs, SSH/GPG agent sockets).
+- Library downloads are allow-listed to the FreeCAD library on api.github.com and raw.githubusercontent.com;
+  redirects to other hosts are refused. Parts copied from a local clone (`FCSKILL_LIBRARY`) must stay inside it.
+- Files copied back from the snap staging folder are confined to it as well as to the workspace.
+- The documentation now states plainly that the `python` op is not a sandbox and that only its document
+  changes are rolled back. The skill description discloses DXF drawings, stress analysis and the optional
+  library downloads.
+
+### Changed
+- `fem_static` warns `NO_CONVERGENCE_CHECK` when `convergence` is off and `NO_EQUILIBRIUM_CHECK` when the
+  solver reports no reactions, instead of skipping those checks silently, and its result has a `checks` field
+  (`passed`, `skipped` or `unavailable` for each check).
+- `measure` takes the same material names as `material` (every preset, including `rubber`, aliases and
+  FreeCAD library materials), with the same densities: `steel` is now FreeCAD's 7.90 g/cm3 instead of 7.85.
+  `wood_oak` is an alias of `wood`.
+- The `rename` conflict error names the object that already uses the label.
+
+### Fixed
+- Closed-loop assemblies (four-bar, crank-slider) now solve. Joint pre-solving left the chain straight, a
+  start from which the closing joint fails, so a failed solve is retried from the parts' `position`/`rotation`
+  given in `assembly`, then from slightly turned starts. A solve that moves a grounded part counts as failed.
+- `joint` no longer warns `INTERFERENCE` for parts that are not joined yet; they are listed in `not_joined`.
+
 ## 2.0.0
 
 A rewrite of the engine around native, parametric FreeCAD features. **Breaking changes:** v2 is not

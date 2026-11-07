@@ -1,8 +1,5 @@
 # FreeCAD skill for OpenClaw
 
-[![Tests](https://github.com/ninja7v/freecad-skill/actions/workflows/tests.yml/badge.svg)](https://github.com/ninja7v/freecad-skill/actions/workflows/tests.yml)
-[![License: MIT-0](https://img.shields.io/badge/License-MIT--0-green.svg)](LICENSE)
-
 This skill lets an AI agent create, edit, inspect and export real, **parametric** FreeCAD models. It sends
 structured JSON and gets verified geometry back. You can open the result in FreeCAD and keep working on it:
 each step is a native feature (`Part::Box`, `Part::Cut`, `Part::Fillet`, Draft arrays, spreadsheet
@@ -218,8 +215,8 @@ To add an operation:
 
 ```bash
 python3 tests/run.py                                   # everything green first
-clawhub skill publish . --version 2.0.0 --dry-run      # check what will be uploaded
-clawhub skill publish . --version 2.0.0 \
+clawhub skill publish . --version 2.0.1 --dry-run      # check what will be uploaded
+clawhub skill publish . --version 2.0.1 \
   --categories development,creative --topics cad,freecad,3d-printing,step,parametric
 clawhub scan --slug freecad-skill                      # read the security report
 ```

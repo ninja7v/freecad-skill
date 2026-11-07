@@ -566,7 +566,7 @@ Escape hatch: run FreeCAD Python for something no op covers. Disabled unless the
 |---|---|---|---|---|---|
 | `code` | string | **yes** |  |  | Python source. Available: App, Part, Vector, doc, get(name). Assign 'result' to return JSON data; print() output is returned too. |
 
-Runs inside the request: the document is recomputed and new objects are verified afterwards, and nothing is saved if any step fails. Prefer regular ops; they validate inputs and explain failures.
+Runs inside the request: the document is recomputed and new objects are verified afterwards, and the document is not saved if any step fails. Not a sandbox: the code runs with the user's permissions and is not confined to the workspace, and only document changes are rolled back. Prefer regular ops; they validate inputs and explain failures.
 
 ```json
 {"op": "python", "code": "b = doc.addObject('Part::Wedge', 'Ramp')\nresult = b.Name"}
@@ -600,7 +600,7 @@ Clearance and interference between objects (minimum distance, closest points, ov
 |---|---|---|---|---|---|
 | `objects` | names |  |  |  | Objects to compare pairwise (default: all result objects). An assembly stands for its parts, measured where they are assembled; name a single part by its link (e.g. Pin_Part). |
 | `require` | object |  |  |  | Assertions that fail the step: {"min_clearance": mm} and/or {"no_interference": true}. |
-| `material` | enum |  |  | `pla` \| `petg` \| `abs` \| `nylon` \| `aluminium` \| `steel` \| `stainless_steel` \| `brass` \| `titanium` \| `wood_oak` | Material for mass (g). |
+| `material` | string |  |  |  | Material for mass (g): a preset or FreeCAD library material name, as in the 'material' op (e.g. 'steel', 'pla', 'rubber'). Without it, materials assigned with 'material' are used. |
 | `density` | number |  |  | > 0 | Explicit density in g/cm3 (instead of 'material'). |
 
 Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0).
@@ -625,7 +625,7 @@ Linear static stress analysis (Gmsh + CalculiX, 2nd-order elements): fixed faces
 | `report` | path |  |  |  | Write a PNG stress map (4 views). |
 | `keep` | bool |  | `false` |  | Keep the analysis (mesh, results) in the document for review in the FreeCAD GUI. |
 
-Estimates only: linear elastic, small deformations, no contact. Printed plastics are weaker between layers. Peak stress at sharp inner corners is mesh-dependent (STRESS_CONCENTRATION warning): add fillets.
+Estimates only: linear elastic, small deformations, no contact. Printed plastics are weaker between layers. Peak stress at sharp inner corners is mesh-dependent (STRESS_CONCENTRATION warning): add fillets. A check that could not run is a warning (NO_CONVERGENCE_CHECK, NO_EQUILIBRIUM_CHECK): the result is then unverified.
 
 ```json
 {"op": "fem_static", "target": "Bracket", "material": "aluminium_6061_t6", "fixed": "<X", "loads": [{"faces": ">X", "force": "200 N", "direction": [0, 0, -1]}], "require": {"min_safety_factor": 2}, "report": "stress.png"}
