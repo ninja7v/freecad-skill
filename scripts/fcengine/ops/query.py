@@ -135,8 +135,8 @@ def inspect(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
     if geometry.is_part_shape(obj) and not obj.Shape.isNull() and obj.Shape.Solids:
-        verdict = geometry.self_intersects(obj.Shape)
-        entry["self_intersecting"] = verdict if verdict is not None else "not checked (too many faces)"
+        verdict, reason = geometry.self_check(obj.Shape)
+        entry["self_intersecting"] = verdict if verdict is not None else f"not checked ({reason})"
     if p.get("topology") and geometry.is_part_shape(obj) and not obj.Shape.isNull():
         faces = geometry.describe_faces(obj.Shape)
         edges = geometry.describe_edges(obj.Shape)

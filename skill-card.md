@@ -27,7 +27,7 @@ Global
 
 Risk: The skill writes and may overwrite the requested FreeCAD document and export files.
 
-Mitigation: All paths are confined to the workspace directory (no `..`, absolute paths or symlink escapes); a request that fails writes nothing; saves are atomic. Run it in a dedicated project folder.
+Mitigation: All paths are confined to the workspace directory (no `..`, absolute paths or symlink escapes; the parts cache is never read or written through links); a request that fails writes nothing; saves are atomic. Run it in a dedicated project folder.
 
 Risk: Generated geometry may not match the user's intent.
 
@@ -58,7 +58,7 @@ Mitigation: Network is used only by the library command and by import steps that
 
 ## Skill Version(s):
 
-3.0.0
+3.0.1
 
 ## Ethical Considerations:
 

@@ -271,12 +271,24 @@ def _quality_gate(ctx: Any, objs: List[Any], entries: List[Dict[str, Any]]) -> N
             continue
         if obj.Name in before and audit._same(before[obj.Name], audit._fingerprint(obj)):
             continue  # unchanged by this request: it was checked when it was made
-        verdict = geometry.self_intersects(obj.Shape)
-        if verdict and any(w["code"] == "SELF_INTERSECTION" and f"'{obj.Name}'" in w["message"] for w in ctx.warnings):
-            entry["self_intersecting"] = True
-            continue  # already reported by the export that wrote it
+        verdict, reason = geometry.self_check(obj.Shape)
+        code = "SELF_INTERSECTION" if verdict else "SELF_INTERSECTION_UNCHECKED"
+        told = any(w["code"] == code and f"'{obj.Name}'" in w["message"] for w in ctx.warnings)
         if verdict is None:
-            entry["self_intersection_check"] = "skipped"
+            # Not established is never reported as clean: the result says so, and so does a warning.
+            entry["self_intersection_check"] = f"not checked ({reason})"
+            if not told:  # else already reported by the export that wrote it
+                ctx.warnings.append(
+                    {
+                        "step": None,
+                        "code": code,
+                        "message": f"'{obj.Name}' was not checked for passing through itself ({reason}), so its "
+                        'volume and mass are unconfirmed. Add expect {"self_intersecting": false} to a step to '
+                        "require a confirmed result.",
+                    }
+                )
+        elif verdict and told:
+            entry["self_intersecting"] = True
         elif verdict:
             entry["self_intersecting"] = True
             ctx.warnings.append(

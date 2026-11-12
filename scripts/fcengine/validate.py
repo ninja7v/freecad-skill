@@ -439,11 +439,11 @@ def expect_problems(exp: Any) -> List[str]:
             out.append(f"expect.{k} must be a non-negative number")
         elif k == "solids" and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
             out.append("expect.solids must be a non-negative integer")
-        elif k == "valid" and not isinstance(v, bool):
-            out.append("expect.valid must be true or false")
+        elif k in ("valid", "self_intersecting") and not isinstance(v, bool):
+            out.append(f"expect.{k} must be true or false")
     if exp and set(exp) <= {"tolerance", "volume_tolerance"}:
         out.append(
-            "expect has only tolerances; add something to check (volume, bbox_size, bbox_min, bbox_max, solids, valid)"
+            "expect has only tolerances; add something to check (volume, bbox_size, bbox_min, bbox_max, solids, valid, self_intersecting)"
         )
     return out
 

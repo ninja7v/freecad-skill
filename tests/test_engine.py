@@ -2428,6 +2428,84 @@ class V3Tests(EngineCase):
         self.assertNotIn("warnings", r)
         self.assertNotIn("self_intersecting", self.result(r, "Spring"))
 
+    def test_self_check_never_reports_an_unobtained_clean_result(self):
+        from fcengine import geometry
+
+        class Solid:
+            def __init__(self, error=None, valid=True):
+                self.error, self.valid = error, valid
+
+            def check(self, _bop):
+                if self.error is not None:
+                    raise self.error
+
+            def isValid(self):
+                return self.valid
+
+        class Shape:
+            def __init__(self, solids, faces=6):
+                self.Solids, self.Faces = solids, [None] * faces
+
+            def isNull(self):
+                return False
+
+            def hashCode(self):
+                return id(self)
+
+            def isSame(self, other):
+                return other is self
+
+        bop = "BOP check found the following errors:\n"
+        hit = ValueError(bop + "Error in Face: BOPAlgo SelfIntersect\nError in Edge: BOPAlgo GeomAbs_C0\n")
+        other = ValueError(bop + "Error in Edge: BOPAlgo GeomAbs_C0\nError in Edge: BOPAlgo TooSmallEdge\n")
+        aborted = ValueError(bop + "Error in Solid: BOPAlgo OperationAborted\n")
+        cases = [
+            ([Solid()], False),
+            ([Solid(), Solid(other)], False),  # the test ran; only unrelated findings
+            ([Solid(hit)], True),
+            ([Solid(RuntimeError("boom")), Solid(hit)], True),  # a confirmed hit stands
+            ([Solid(ValueError("No error\n"), valid=False)], None),  # invalid: FreeCAD never ran the test
+            ([Solid(), Solid(RuntimeError("boom"))], None),  # one unchecked solid leaves the shape open
+            ([Solid(aborted)], None),
+            ([Solid(ValueError(""))], None),
+            ([Solid(ValueError("Error in Face: BOPAlgo GeomAbs_C0"))], None),  # not a checker report
+            ([], None),
+        ]
+        for solids, want in cases:
+            shape = Shape(solids)
+            verdict, reason = geometry.self_check(shape)
+            self.assertIs(verdict, want, (solids and solids[-1].error, reason))
+            self.assertEqual(reason is None, want is not None)
+            self.assertEqual(geometry.self_check(shape), (verdict, reason))  # the cache keeps the three states
+            self.assertIs(geometry.self_intersects(shape), want)
+        big = Shape([Solid()], faces=geometry.SELF_CHECK_MAX_FACES + 1)
+        self.assertEqual(geometry.self_check(big)[0], None)
+        self.assertIn("skipped", geometry.self_check(big)[1])
+
+    def test_unchecked_self_intersection_is_reported_not_passed(self):
+        from fcengine import geometry
+
+        box = {"op": "box", "name": "B", "length": 10, "width": 10, "height": 10}
+        real = geometry._self_check
+        geometry._self_check = lambda shape: (None, "the check did not complete: boom")
+        geometry._SELF.clear()
+        try:
+            r = self.run_ok([box, {"op": "export", "filename": "b.step"}])
+            self.assertEqual([w["code"] for w in r["warnings"]], ["SELF_INTERSECTION_UNCHECKED"])
+            entry = self.result(r, "B")
+            self.assertNotIn("self_intersecting", entry)
+            self.assertIn("not checked", entry["self_intersection_check"])
+            self.assertEqual(list(r["exports"][0]["verified"]["self_intersection_unchecked"]), ["B"])
+            r = self.run_ok([{"op": "inspect", "target": "B"}], new=False)
+            self.assertIn("not checked", json.dumps(r))
+            err = self.run_err([dict(box, expect={"self_intersecting": False})], "EXPECTATION_FAILED")
+            self.assertIn("not checked", json.dumps(err))
+        finally:
+            geometry._self_check = real
+            geometry._SELF.clear()
+        r = self.run_ok([dict(box, expect={"self_intersecting": False})])
+        self.assertNotIn("warnings", r)
+
     def test_step_keeps_names_placement_and_assembly_structure(self):
         r = self.run_ok(
             [

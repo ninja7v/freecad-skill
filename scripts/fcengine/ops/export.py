@@ -260,13 +260,29 @@ def _write_brep_like(fmt: str, objs: List[Any], path: Path, shown: str, ctx: Con
                 f"{shown} was written without part names or assembly structure (this FreeCAD build's structured "
                 "STEP writer failed); the geometry is complete and verified",
             )
-    bad = [o.Name for o in objs if geometry.self_intersects(o.Shape)]
+    bad: List[str] = []
+    unchecked: Dict[str, str] = {}
+    for o in objs:
+        if o.Shape.isNull() or not o.Shape.Solids:
+            continue  # wires, faces and shells have no solid to check
+        verdict, reason = geometry.self_check(o.Shape)
+        if verdict:
+            bad.append(o.Name)
+        elif verdict is None:
+            unchecked[o.Name] = str(reason)
     if bad:
         checks["self_intersecting"] = bad
         ctx.warn(
             "SELF_INTERSECTION",
-            f"{shown}: {bad} pass through themselves; other CAD systems may reject the file or compute wrong "
-            "volumes. Fix the geometry before handing it over.",
+            f"{shown}: {', '.join(repr(n) for n in bad)} pass through themselves; other CAD systems may reject "
+            "the file or compute wrong volumes. Fix the geometry before handing it over.",
+        )
+    if unchecked:  # not established is recorded as such, never as a clean result
+        checks["self_intersection_unchecked"] = unchecked
+        ctx.warn(
+            "SELF_INTERSECTION_UNCHECKED",
+            f"{shown}: {', '.join(f'{n!r} ({why})' for n, why in unchecked.items())} could not be checked for "
+            "passing through themselves; the file is written, but this property is unconfirmed.",
         )
     return checks
 

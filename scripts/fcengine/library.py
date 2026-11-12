@@ -10,7 +10,11 @@ Pure Python (stdlib), run by the launcher: FreeCAD's own Python may lack SSL
   hash from the index, so a tampered or truncated download is rejected.
 - Network goes only to api.github.com and raw.githubusercontent.com for this
   repository. FCSKILL_OFFLINE=1 disables it; FCSKILL_LIBRARY may point at a
-  local clone instead (no network at all).
+  local clone instead (no network at all). The launcher reads these two
+  settings and passes them in as a Source: this module reads no environment
+  variable, and a request is built from constants and a library path only.
+- Cache files are reached from the workspace folder one path component at a
+  time, without following links (see _open_dir).
 - Parts are CC-BY 3.0: every import carries an attribution.
 """
 
@@ -20,11 +24,14 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -68,18 +75,29 @@ def _safe_rel(path: str) -> str:
 # ------------------------------------------------------------------ index
 
 
-def _local_root() -> Optional[Path]:
-    raw = os.environ.get(ENV_LOCAL)
-    if not raw:
-        return None
-    root = Path(raw).expanduser()
+@dataclass(frozen=True)
+class Source:
+    """Where parts come from: a local clone of the library, or GitHub unless ``offline``."""
+
+    local: Optional[Path] = None
+    offline: bool = False
+
+
+GITHUB = Source()
+
+
+def source(local: Optional[str], offline: bool) -> Source:
+    """The Source for the launcher's settings (the values of FCSKILL_LIBRARY and FCSKILL_OFFLINE)."""
+    if not local:
+        return Source(None, offline)
+    root = Path(local).expanduser()
     if not root.is_dir():
         raise _err(
             errors.LIBRARY_UNAVAILABLE,
-            f"{ENV_LOCAL} points to '{raw}', which is not a folder",
+            f"{ENV_LOCAL} points to '{local}', which is not a folder",
             hint="Point it at a clone of https://github.com/FreeCAD/FreeCAD-library, or unset it to download parts.",
         )
-    return root
+    return Source(root, offline)
 
 
 def _check_url(url: str) -> None:
@@ -98,21 +116,17 @@ class _SameHostRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _require_online() -> None:
-    if os.environ.get(ENV_OFFLINE) == "1":
+USER_AGENT = f"fcskill/{__version__}"
+
+
+def _get(url: str, limit: int, offline: bool) -> bytes:
+    _check_url(url)
+    if offline:
         raise _err(
             errors.LIBRARY_UNAVAILABLE,
             "Network access is disabled (FCSKILL_OFFLINE=1)",
             hint=f"Ask the user to unset FCSKILL_OFFLINE, or to set {ENV_LOCAL} to a local clone of the FreeCAD library.",
         )
-
-
-USER_AGENT = f"fcskill/{__version__}"
-
-
-def _get(url: str, limit: int) -> bytes:
-    _check_url(url)
-    _require_online()
     # No cookies, credentials or other headers: a bare anonymous GET of a fixed, allow-listed URL.
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"})
     opener = urllib.request.build_opener(_SameHostRedirect)
@@ -140,9 +154,9 @@ def _get(url: str, limit: int) -> bytes:
     return data
 
 
-def load_index(root: Path, refresh: bool = False) -> Dict[str, Any]:
+def load_index(root: Path, refresh: bool = False, src: Source = GITHUB) -> Dict[str, Any]:
     """{"source": ..., "files": {path: {"size": n, "sha": git blob sha or None}}}."""
-    local = _local_root()
+    local = src.local
     if local is not None:
         files = {}
         for dirpath, _dirs, names in os.walk(local):
@@ -154,12 +168,13 @@ def load_index(root: Path, refresh: bool = False) -> Dict[str, Any]:
                     files[full.relative_to(local).as_posix()] = {"size": full.stat().st_size, "sha": None}
         return {"source": str(local), "files": files}
     cache = root / CACHE_DIR / "index.json"
-    if cache.is_file() and not refresh and time.time() - cache.stat().st_mtime < INDEX_TTL_S:
+    cached = None if refresh else _read_cached(root, cache)
+    if cached is not None and time.time() - cached[1] < INDEX_TTL_S:
         try:
-            return json.loads(cache.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            return json.loads(cached[0].decode("utf-8"))
+        except ValueError:
             pass
-    tree = json.loads(_get(API_TREE, 50 * 1024 * 1024).decode("utf-8"))
+    tree = json.loads(_get(API_TREE, 50 * 1024 * 1024, src.offline).decode("utf-8"))
     if tree.get("truncated"):
         raise _err(
             errors.LIBRARY_UNAVAILABLE,
@@ -255,20 +270,163 @@ def local_path(root: Path, repo_path: str) -> Path:
     return root / CACHE_DIR / "parts" / _safe_rel(repo_path)
 
 
-def _write_cached(root: Path, dest: Path, data: bytes) -> None:
-    """Write a cache file without following links: a link planted in the cache cannot redirect the write."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    cache = (root / CACHE_DIR).resolve()
-    if not dest.parent.resolve().is_relative_to(cache):  # a linked folder could point anywhere
-        raise _err(errors.LIBRARY_UNAVAILABLE, f"'{dest.parent}' is not inside the library cache {cache}")
-    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".part")  # new file, never a link
+# Cache files are read and written without following links. Checking a resolved path first is not enough:
+# a link planted at .fcskill, at .fcskill/library or at any folder below would resolve consistently for the
+# cache root and the file alike, and a folder can be swapped between the check and the write. So where the
+# platform has descriptor-relative calls (Linux, macOS), each component is opened from its parent's
+# descriptor with O_NOFOLLOW, and the file is created and renamed relative to the last descriptor.
+_DIR_FD = (
+    {os.open, os.mkdir, os.rename, os.unlink} <= os.supports_dir_fd
+    and hasattr(os, "O_NOFOLLOW")
+    and hasattr(os, "O_DIRECTORY")
+)
+_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _cache_parts(root: Path, path: Path) -> Tuple[str, ...]:
+    """Components of a cache path below the workspace: always .fcskill/library/..."""
     try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, dest)  # replaces the directory entry itself
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = ()
+    if parts[: len(CACHE_DIR.parts)] != CACHE_DIR.parts or any(p in ("", ".", "..") for p in parts):
+        raise _err(errors.LIBRARY_UNAVAILABLE, f"'{path}' is not inside the library cache of {root}")
+    return parts
+
+
+def _link_error(root: Path, names: Tuple[str, ...]) -> errors.SkillError:
+    where = Path(*names).as_posix()
+    return _err(
+        errors.LIBRARY_UNAVAILABLE,
+        f"'{where}' in the workspace is a link or not a folder: the library cache is not used through links",
+        hint=f"Remove '{root / where}' (the cache is rebuilt on demand).",
+    )
+
+
+def _open_dir(root: Path, names: Tuple[str, ...], create: bool) -> Optional[int]:
+    """Descriptor of the folder root/names..., or None if it does not exist (and ``create`` is false).
+
+    Each component is opened relative to its parent's descriptor and must be a real folder."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | _CLOEXEC)
+    try:
+        for i, name in enumerate(names):
+            if create:
+                try:
+                    os.mkdir(name, 0o777, dir_fd=fd)
+                except FileExistsError:
+                    pass  # whatever is there is verified by the open below
+            try:
+                nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | _CLOEXEC, dir_fd=fd)
+            except FileNotFoundError:
+                if create:
+                    raise
+                os.close(fd)
+                return None
+            except OSError:  # ELOOP or ENOTDIR: a link, or a file where a folder belongs
+                raise _link_error(root, names[: i + 1]) from None
+            os.close(fd)
+            fd = nxt
+        return fd
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        os.close(fd)
         raise
+
+
+def _plain_dir(root: Path, names: Tuple[str, ...], create: bool) -> Optional[Path]:
+    """The same walk for platforms without descriptor-relative calls (Windows): every component is checked
+    to be a real folder, not a symbolic link or junction, before the next one is entered."""
+    folder = root
+    for i, name in enumerate(names):
+        folder = folder / name
+        if create and not os.path.lexists(folder):
+            folder.mkdir(exist_ok=True)
+        if folder.is_symlink() or folder.is_junction():
+            raise _link_error(root, names[: i + 1])
+        if not os.path.lexists(folder):
+            return None
+        if not folder.is_dir():
+            raise _link_error(root, names[: i + 1])
+    return folder
+
+
+def _read_cached(root: Path, path: Path) -> Optional[Tuple[bytes, float]]:
+    """(content, modification time) of a cache file; None if it is absent or not a regular file (a link
+    is not followed: the entry counts as missing and is rewritten)."""
+    *dirs, name = _cache_parts(root, path)
+    try:
+        if not _DIR_FD:
+            folder = _plain_dir(root, tuple(dirs), create=False)
+            if folder is None or (folder / name).is_symlink() or not (folder / name).is_file():
+                return None
+            return (folder / name).read_bytes(), (folder / name).stat().st_mtime
+        fd = _open_dir(root, tuple(dirs), create=False)
+        if fd is None:
+            return None
+        try:
+            file_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | _CLOEXEC, dir_fd=fd)
+        finally:
+            os.close(fd)
+        with os.fdopen(file_fd, "rb") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            return fh.read(), info.st_mtime
+    except OSError:
+        return None
+
+
+def _write_cached(root: Path, dest: Path, data: bytes) -> None:
+    """Write a cache file without following links, at any level: see _open_dir. The data goes to a new
+    file (O_EXCL), which then replaces the directory entry itself, so a link planted at ``dest`` is replaced,
+    not written through."""
+    *dirs, name = _cache_parts(root, dest)
+    try:
+        if not _DIR_FD:
+            folder = _plain_dir(root, tuple(dirs), create=True)
+            assert folder is not None
+            file_fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{name}.", suffix=".part")  # new file, never a link
+            try:
+                with os.fdopen(file_fd, "wb") as fh:
+                    fh.write(data)
+                os.replace(tmp, folder / name)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            return
+        fd = _open_dir(root, tuple(dirs), create=True)
+        assert fd is not None
+        tmp = f".{name}.{secrets.token_hex(8)}.part"
+        try:
+            file_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | _CLOEXEC, 0o644, dir_fd=fd)
+            try:
+                with os.fdopen(file_fd, "wb") as fh:
+                    fh.write(data)
+                os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=fd)
+                except OSError:
+                    pass
+                raise
+        finally:
+            os.close(fd)
+    except OSError as e:
+        raise _err(errors.LIBRARY_UNAVAILABLE, f"Cannot write the library cache file '{dest}': {e}") from None
+
+
+def parts_folder(root: Path) -> Optional[Path]:
+    """The folder of downloaded parts if it exists; refused if it is reached through a link."""
+    names = _cache_parts(root, root / CACHE_DIR / "parts")
+    if not _DIR_FD:
+        return _plain_dir(root, names, create=False)
+    try:
+        fd = _open_dir(root, names, create=False)
+    except OSError:
+        return None
+    if fd is None:
+        return None
+    os.close(fd)
+    return root.joinpath(*names)
 
 
 def attribution(repo_path: str) -> Dict[str, str]:
@@ -287,25 +445,24 @@ def _blob_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()  # noqa: S324 - git object id, not security
 
 
-def fetch(root: Path, ref: str, index: Optional[Dict[str, Any]] = None) -> Tuple[Path, Dict[str, Any]]:
+def fetch(
+    root: Path, ref: str, index: Optional[Dict[str, Any]] = None, src: Source = GITHUB
+) -> Tuple[Path, Dict[str, Any]]:
     """Make the part available in the workspace; returns its path and metadata (also written next to it)."""
-    index = index or load_index(root)
+    index = index or load_index(root, src=src)
     repo_path = resolve(index, ref)
     dest = local_path(root, repo_path)
     meta = {"library": repo_path, **attribution(repo_path)}
     entry = index["files"][repo_path]
-    local = _local_root()
-    if (
-        dest.is_file()
-        and not dest.is_symlink()
-        and (entry["sha"] is None or _blob_sha(dest.read_bytes()) == entry["sha"])
-    ):
+    local = src.local
+    cached = _read_cached(root, dest)
+    if cached is not None and (entry["sha"] is None or _blob_sha(cached[0]) == entry["sha"]):
         pass  # cached and intact
     elif local is not None:
-        src = (local / repo_path).resolve()
-        if not src.is_file() or not src.is_relative_to(local.resolve()):
+        part = (local / repo_path).resolve()
+        if not part.is_file() or not part.is_relative_to(local.resolve()):
             raise _err(errors.LIBRARY_UNAVAILABLE, f"'{repo_path}' is not a file inside {ENV_LOCAL} ({local})")
-        _write_cached(root, dest, src.read_bytes())
+        _write_cached(root, dest, part.read_bytes())
     else:
         if entry.get("size", 0) > MAX_DOWNLOAD:
             raise _err(
@@ -314,7 +471,7 @@ def fetch(root: Path, ref: str, index: Optional[Dict[str, Any]] = None) -> Tuple
                 f"{MAX_DOWNLOAD // (1024 * 1024)} MB",
                 hint="Pick a lighter variant, or download it yourself and import the file.",
             )
-        data = _get(RAW + urllib.parse.quote(repo_path), MAX_DOWNLOAD)
+        data = _get(RAW + urllib.parse.quote(repo_path), MAX_DOWNLOAD, src.offline)
         if _blob_sha(data) != entry["sha"]:
             raise _err(
                 errors.LIBRARY_UNAVAILABLE,
