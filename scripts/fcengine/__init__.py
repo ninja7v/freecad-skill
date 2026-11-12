@@ -5,4 +5,4 @@ Pure modules (importable without FreeCAD): ``catalog``, ``validate``,
 FreeCAD-dependent modules: ``runner``, ``document``, ``geometry``, ``ops``.
 """
 
-__version__ = "2.0.3"
+__version__ = "3.0.0"

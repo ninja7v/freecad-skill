@@ -1,7 +1,7 @@
 ---
 name: freecad-skill
-description: "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; stress checks; optional parts from GitHub."
-version: 2.0.3
+description: "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; mass and stress checks; parts from GitHub."
+version: 3.0.0
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
 metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
@@ -58,6 +58,8 @@ If `doctor` says FreeCAD is missing, ask the user to install FreeCAD 1.1+ or to 
 - `doc`: the `.FCStd` file (default `model.FCStd`). It is created if missing and re-opened on later requests.
 - `new: true`: start from an empty document, replacing the file's content.
 - `dry_run: true`: run and report without saving or exporting.
+- `brief: true`: leave volume and bounding box out of the per-step entries. Use it for long requests;
+  `results`, `warnings` and errors are reported as usual.
 - **All or nothing:** if any step fails, nothing is saved or exported and the file on disk is unchanged.
   Fix the reported step and resend the whole request.
 - Before anything runs, the whole request is validated. Unknown ops or parameters, typos and missing
@@ -91,6 +93,9 @@ When something is wrong, `warnings` appears, e.g.
 - `OVERLAPPING_RESULTS` means two finished parts occupy the same space. Usually one is a leftover helper (a
   cutter you never used, which then hides the part in renders), or two parts that should touch are sized wrong.
   Every result is rendered and exported, so delete leftovers before trusting a render.
+- `SELF_INTERSECTION` means a result passes through itself (e.g. a spring whose wire is thicker than its
+  pitch). Its volume and mass are wrong and other CAD systems may reject it: fix it, don't deliver it.
+- `DEEP_CHAIN` means many booleans are stacked one on another, which gets slow. See Workflow, step 3.
 - On failure, `error` has `code`, `message`, `hint`, `step`, `op` and often `details` (available names,
   measured values). Exit code is 0 on success, 1 when the request failed, 2 when FreeCAD is missing or crashed.
 
@@ -124,7 +129,7 @@ When something is wrong, `warnings` appears, e.g.
 | `sweep` | Profile along a path or helix (tubes, handles, springs, threads) | `shapes*`, `path` (+`smooth`, `corner_radius`) or `helix`, `up`; in a body: `body` `mode` |
 | `text` | Lettering as a solid, to engrave (cut) or emboss (fuse) | `text*` `size*` `height*` `position` `plane` `align` `angle` `reversed` `font` |
 | `body` | PartDesign body: one solid built feature by feature | `name` `position` `rotation` |
-| `assembly` | Assembly of parts (links to solids/bodies); first part grounded | `parts*` (`object`, `name`, `position`, `ground`) |
+| `assembly` | Assembly of parts (links to solids/bodies); first part grounded; returns a bill of materials (`bom`) | `parts*` (`object`, `name`, `position`, `ground`) |
 | `joint` | Connect two assembly parts and solve: fixed, revolute, cylindrical, slider, ball, parallel, perpendicular | `assembly*` `type*` `a*` `b*` (`{"part", "face"/"edge"}`) `offset` |
 | `hole` | Drilled holes in a body: simple, counterbore, countersink, threaded | `body*` `at*` `offset` `size` (`M2`…`M20`) or `diameter`, `fit` `threaded` `type` `depth` |
 | `cut` | Subtract | `base*` `tool` or `tools` |
@@ -148,12 +153,12 @@ When something is wrong, `warnings` appears, e.g.
 | `rename` | Change label | `target*` `label*` |
 | `inspect` | Document tree, or one object in detail | `target` `topology` |
 | `check` | Assert geometry | `target*` `expect*` |
-| `measure` | Clearance, interference, closest points, mass | `objects` `require` (`min_clearance`, `no_interference`) `material` |
+| `measure` | Clearance, interference, closest points; mass, centre of mass, inertia | `objects` `require` (`min_clearance`, `no_interference`) `material` `density` |
 | `import` | Solid from a STEP/IGES/BREP/FCStd file or a closed STL/OBJ/3MF mesh, or a ready-made part from the FreeCAD library | `library` or `file`, `anchor` `position` `rotation` `refine` `name` |
 | `material` | Material and/or colour of finished parts (FreeCAD material, GUI colour, renders, masses) | `targets*` `material` `color` `transparency` |
-| `fem_static` | Stress analysis: displacement, von Mises stress, safety factor | `target*` `material*` `fixed*` `loads*` `require` `report` `mesh_size` |
+| `fem_static` | Stress analysis: displacement, von Mises stress, safety factor | `target*` `fixed*` `loads*` `material` `require` `report` `mesh_size` |
 | `export` | STEP/IGES/BREP/STL/OBJ/3MF, or a flat DXF/SVG outline (laser/CNC), verified | `filename*` `targets` `tolerance` `view` |
-| `drawing` | Technical drawing (DXF): views, verified dimensions, title | `filename*` `sheet` `projection` `scale` `dimensions` `title` `author` `preview` |
+| `drawing` | Technical drawing (DXF): views, verified dimensions, hole table, title | `filename*` `sheet` `projection` `scale` `dimensions` `title` `author` `preview` |
 | `render` | Shaded PNG views for a visual check | `filename*` `views` (default iso, front, top, right) `size` |
 
 `rotation` is `{"axis": [x, y, z], "angle": deg}`. Full details are in `describe <op>` or
@@ -193,94 +198,32 @@ Shapes must be separate or fully nested; partial overlaps are rejected. `offset`
 along its normal. To change the outline later, use `set` with `{"shapes": [...]}`. `points` is a shortcut for
 a plain polygon.
 
-### Loft and sweep
-
-Use these for organic and curved parts instead of approximating them with booleans of primitives.
-
-```json
-{"op": "loft", "name": "Shell", "sections": [
-  {"shape": {"rect": [-20, -15, 20, 15], "corner_radius": 4}, "plane": "XY", "offset": 0},
-  {"shape": {"circle": [0, 0], "radius": 12}, "plane": "XY", "offset": 30},
-  {"shape": {"circle": [0, 0], "radius": 6}, "plane": "XY", "offset": 50}]}
-```
-
-- **Loft:**
-  - Each section is one closed shape (no holes) in a plane at an `offset`, drawn like an extrude profile.
-  - A smooth loft bulges between very different sections; add intermediate sections, or set `ruled: true`.
-  - Edit with `set` and `{"sections": [...]}`, keeping the same number of sections.
+**Parametric profiles.** The numbers of `rect`, `circle` and `slot` (coordinates, `radius`,
+`corner_radius`) can be expressions, so the outline follows the parameters:
 
 ```json
-{"op": "sweep", "name": "Handle", "shapes": [{"circle": [0, 0], "radius": 6}, {"circle": [0, 0], "radius": 4}],
- "path": [[0, 0, 0], [0, 0, 40], [60, 0, 40], [60, 0, 0]], "corner_radius": 12}
+{"op": "set_params", "values": {"width": 90, "depth": 50, "bore": 12}},
+{"op": "extrude", "name": "Plate", "height": 6, "shapes": [
+  {"rect": [0, 0, "=Params.width", "=Params.depth"], "corner_radius": 5},
+  {"circle": ["=Params.width / 2", "=Params.depth / 2"], "radius": "=Params.bore / 2"}]}
 ```
 
-- **Sweep:**
-  - The path is `[x, y, z]` points: straight segments by default, `corner_radius` for bent-tube corners, or
-    `smooth: true` for a curve through the points. Alternatively, a `helix`
-    (`{"radius", "pitch", "height", "left_handed", "center", "axis"}`).
-  - The profile is drawn in 2D around the start of the path. (0, 0) sits on the path, y points `up`
-    (default +Z), and x points to the right when looking along the path (outward on a helix). The response
-    reports this `profile_frame`.
-  - A profile may have holes (a tube).
-  - Spring: a circle swept along a helix. Thread: a triangle such as
-    `{"polygon": [[-0.1, -1], [1.5, 0], [-0.1, 1]]}` swept along a helix at the core radius, in a body with
-    `mode` add (external) or remove (internal).
-  - Edit with `set`: `path`, `corner_radius`, `helix`, `up` or `shapes`.
-- Both work in a PartDesign body (`body`, `mode`); coordinates are then body coordinates.
+Changing `width` with `set_params` then resizes the plate and keeps the bore centred. These three shapes
+are stored as fully dimensioned sketches (one named dimension per number), so they also stay put when a
+person opens the sketch in FreeCAD. `polygon`, `spline` and `path` take numbers only; so do sweep profiles
+and loft sections.
 
-### Text
+### More operations (read the guide first)
 
-```json
-{"op": "text", "name": "Label", "text": "V2.1", "size": 8, "height": 2, "position": [40, 25, 9], "align": "center"},
-{"op": "cut", "name": "Engraved", "base": "Plate", "tool": "Label"}
-```
+These need more than the table above. Read the guide before the first use in a session:
 
-- `size` is the height of capital letters; `height` is the depth of the letters. `position` is where the
-  `align` point goes (`bottom_left` default, `center`, `top_right`, ...; bottom is the baseline).
-- The text lies in `plane` and is extruded along its normal, like `extrude`: XY reads from above and goes
-  +Z; XZ reads from the front and goes +Y (into a front face); YZ reads from the right and goes +X (out of a
-  right face). `angle` turns it in its plane; `reversed` flips the extrusion.
-- **Engrave:** start below the face and pass through it, then `cut`. The example engraves 1 mm into a 10 mm
-  plate: z from 9 to 11. **Emboss:** start just inside the face (z = 9.9 for a top face at 10) and `fuse`.
-- The default font is FreeCAD's bundled osifont; `font` takes a `.ttf`/`.otf` file in the workspace.
-- Edit with `set`: `text`, `size`, `font`, `align`, `height`.
-
-### Ready-made parts (FreeCAD library)
-
-Don't model standard parts that already exist: bearings, stepper motors, fasteners, aluminium profiles,
-electronics boards and more come from the official FreeCAD library (github.com/FreeCAD/FreeCAD-library).
-
-```bash
-python3 {baseDir}/scripts/fcskill.py library 608 bearing
-```
-
-The command returns `matches` with a `part` path and its formats. Import one:
-
-```json
-{"op": "import", "library": "Mechanical Parts/Bearings/608ZZ_Ball_Bearing", "name": "Bearing",
- "anchor": "center", "position": [20, 20, 7.5]}
-```
-
-- **Placement:** library parts keep their author's orientation. Check the reported `bbox`, use `anchor`
-  (`center`, `bottom_center`, `min_corner`) and `rotation`, then cut seats or holes to fit.
-- **Shape:** the result is a fixed solid. It can be placed, cut, fused, measured, given a material and added
-  to an assembly, but its dimensions can't be edited.
-- **Licence:** parts are CC-BY 3.0. Tell the user the `attribution` from the response when you hand over the
-  model.
-- **Network:** search and first use need network access to GitHub (parts are then cached in the workspace).
-  Only anonymous downloads from the FreeCAD library repository are made; nothing about the user or the model
-  is sent. With `FCSKILL_OFFLINE=1`, or without network, the command returns `LIBRARY_UNAVAILABLE`.
-- **Files:** `{"op": "import", "file": "vendor/motor.step"}` imports any STEP/IGES/BREP/FCStd file in the
-  workspace, e.g. a manufacturer's model.
-- **Meshes (STL, OBJ, 3MF, PLY, OFF):** `{"op": "import", "file": "scan.stl"}` turns a closed mesh into a solid
-  you can cut, fuse, measure and export (e.g. "add a hole to this STL").
-  - The solid is made of the mesh's flat triangles. Coplanar ones are merged (`refine`), but curved surfaces
-    stay faceted, so fillets on its edges and FEM are unreliable.
-  - Open, non-manifold or self-intersecting meshes are refused with `GEOMETRY_INVALID`: ask the user to repair
-    the mesh (or for a STEP file). The limit is 20,000 triangles, and booleans on meshes are slow (about
-    a minute at the limit): prefer a STEP file when the user has one.
-  - Mesh files carry no units. Check the reported `bbox`; `CHECK_UNITS` warns when the size looks like inches
-    or metres, which you fix with `scale` (25.4 or 1000).
+- `loft`, `sweep` (springs, tubes, threads) and `text` (engraving, embossing): [docs/SHAPES.md](docs/SHAPES.md).
+- `import` of STEP/IGES/BREP/FCStd files and closed meshes, and ready-made parts from the FreeCAD library
+  (`library` command): [docs/PARTS.md](docs/PARTS.md). The library is the skill's only network use: anonymous
+  downloads from github.com/FreeCAD/FreeCAD-library, off with `FCSKILL_OFFLINE=1`. Library parts are CC-BY 3.0:
+  pass the reported `attribution` on to the user.
+- `assembly` and `joint`: [docs/ASSEMBLIES.md](docs/ASSEMBLIES.md).
+- `fem_static` (stress analysis): [docs/ANALYSIS.md](docs/ANALYSIS.md).
 
 ### PartDesign bodies
 
@@ -322,47 +265,6 @@ shapes or multi-part layouts.
   - Move the whole part by moving the body; features have no placement of their own.
 - **Combining with other solids:** a body can be used like any solid in `cut`, `fuse`, `mirror`, `copy` and `export`.
 
-### Assemblies
-
-```json
-{"op": "assembly", "name": "Hinge", "parts": [{"object": "Plate"}, {"object": "Pin"}]},
-{"op": "joint", "assembly": "Hinge", "type": "revolute", "offset": -10,
- "a": {"part": "Plate", "edge": "%CIRCLE and >Z"}, "b": {"part": "Pin", "edge": "%CIRCLE and <Z"}}
-```
-
-- **Parts:**
-  - Parts are links to existing solids or bodies. Editing the original updates every instance; add the same
-    object twice under different `name`s.
-  - The first part is grounded (fixed in place) unless you set `ground`.
-  - The assembly is the result: export or render the assembly itself. `measure` on the assembly compares its
-    parts as assembled (or name single parts by their link, e.g. `Pin_Part`).
-- **Joints:**
-  - Each side gives a part and **exactly one** face or edge.
-  - A face gives a frame at its centre, along its normal; a circular edge gives its centre and axis.
-  - Part `b` moves to meet part `a`.
-  - `offset` is the distance of `b` from `a`'s surface: positive moves it away, negative sinks it into the
-    material (e.g. a pin into a hole).
-  - Typical uses: a block on a plate is `fixed` face to face; a pin in a hole is `revolute` on circular
-    edges; a shaft that also slides is `cylindrical`.
-  - The two elements are placed on each other, so the choice of edges sets the layers. A hole's top edge on
-    another part's top edge sinks it into that part; the top edge of `a`'s hole with the bottom edge of `b`'s
-    hole stacks `b` on `a`; `offset` adds a gap (a washer).
-  - Linkages: links in one plane overlap at every joint (`INTERFERENCE`), as they would in reality. Stack
-    each link on the one it hinges on, e.g. crank on the ground plate, coupler on the crank, and the rocker
-    under the coupler and on its own pivot.
-  - Closed loops (four-bar, crank-slider) work: set `ground` on every fixed part and add the joints in
-    order, the last one closing the loop. To get a particular pose (e.g. which way the crank points), give the
-    moving parts an approximate `position`/`rotation` in `assembly`. A loop whose lengths can't close fails.
-  - Selector extremes (`<X`, `>X`) are taken over all edges, so on a link with rounded ends they pick the end
-    arc, not the hole: there, give hole edges by index (`inspect` with `topology: true`).
-- **Checks:**
-  - Every joint is verified after solving, so a joint that can't be satisfied, e.g. a conflicting one,
-    fails the request.
-  - Overlapping parts are reported as `INTERFERENCE` warnings with their overlap volume. Check them with
-    `measure` too. Parts not joined yet are listed in `not_joined` and left out of that check.
-- **After edits:** joints are re-resolved and the assembly re-solved after every edit, so parts follow
-  dimension changes.
-
 ### Edge and face selectors
 
 `edges` (fillet/chamfer) and `open_faces` (shell) accept `"all"`, 1-based indices `[1, 3]`, or an expression:
@@ -395,6 +297,10 @@ edges with their type, centre, normal, direction and radius.
 3. **Send one request per coherent change**, with `expect` on the steps that matter (`volume`, `bbox_size`,
    `bbox_min`, `bbox_max`, `solids`). An expectation that doesn't hold is an error, so mistakes never slip
    through as a success.
+   - **Batch repeated features.** Don't cut 30 holes with 30 `cut` steps: each boolean stacked on the last
+     is slower than the one before (50 chained cuts take about 20 s, the same holes in one step about 1 s).
+     Use one `hole` with all centres in `at` (in a body), several circles in one profile, one `cut` with all
+     the `tools`, or an array of the tool.
 4. **Read the response:** per-step `bbox`/`volume`, `results`, `warnings`.
 5. **Modify existing models in place** rather than rebuilding them:
    `{"doc": "bracket.FCStd", "steps": [{"op": "set_params", "values": {"wall": 3}}]}` or
@@ -404,35 +310,13 @@ edges with their type, centre, normal, direction and radius.
 6. **Check fits between parts** with `measure`, e.g.
    `{"op": "measure", "objects": ["Lid", "Box"], "require": {"min_clearance": 0.3}}`. It fails if any gap is
    smaller, and `closest` gives the points where the gap is smallest. Each pair is reported as `clear`,
-   `touching` or `interfering` (with the overlap volume). With a `material`, it also gives each part's mass.
-7. **Check strength** with `fem_static` when the user cares whether a part will hold:
-   ```json
-   {"op": "fem_static", "target": "Bracket", "material": "aluminium_6061_t6", "fixed": "<X",
-    "loads": [{"faces": ">X", "force": "200 N", "direction": [0, 0, -1]}],
-    "require": {"min_safety_factor": 2}, "report": "stress.png"}
-   ```
-   - **Inputs:**
-     - Loads need units (`"500 N"`, `"2 kN"`, `"0.5 MPa"`).
-     - A force is the total over the selected faces; a pressure pushes into the faces.
-   - **Results:**
-     - Max displacement (mm) and max von Mises stress (MPa), each with its location.
-     - Safety factor against yield, and a stress-map PNG.
-     - Always check `equilibrium_error`, which should be near 0, and `convergence`.
-     - `checks` says whether each check `passed`, `failed` or was `unavailable`/`skipped`. A failed
-       equilibrium check is an error. A failed convergence check comes with a `NOT_CONVERGED` or
-       `STRESS_CONCENTRATION` warning (below). `NO_EQUILIBRIUM_CHECK` or `NO_CONVERGENCE_CHECK` warnings mean
-       the result is unverified. Convergence is `unavailable` when the mesh could not be refined enough to
-       compare (`convergence.refined` is false); never report that as converged. In all these cases, say so
-       to the user.
-   - **Warnings:**
-     - `STRESS_CONCENTRATION` means the peak sits at a sharp inner corner, where FEM stress is unreliable
-       and keeps rising with mesh refinement. Add a fillet there and re-run.
-     - `NOT_CONVERGED` means the mesh needs a smaller `mesh_size`.
-   - **Limits:**
-     - This is a linear estimate (no contact, small deformations).
-     - Printed plastics are weaker between layers, so treat their safety factors with extra margin, and tell
-       the user it is not a certified calculation.
-     - It takes seconds to a minute.
+   `touching` or `interfering` (with the overlap volume).
+   - **Mass properties:** `{"op": "measure", "objects": ["Bracket"]}` gives volume, area, centre of mass and
+     the inertia tensor (about the centre of mass, global axes) in `properties`; with a material assigned
+     (or `material`/`density` given) also the mass, and for several parts the `total` mass and centre of mass.
+7. **Check strength** with `fem_static` when the user cares whether a part will hold. Read
+   [docs/ANALYSIS.md](docs/ANALYSIS.md) first: loads need units, and every result comes with checks
+   (`equilibrium`, `convergence`) that you must report to the user when they did not pass.
 8. **Look at it.** Numbers can't show a hole on the wrong face. Add `{"op": "render", "filename": "preview.png"}`
    and view the PNG if you can read images.
    - It shows a 2×2 grid: iso, front (looking along +Y), top (looking down), right (looking along -X).
@@ -444,16 +328,22 @@ edges with their type, centre, normal, direction and radius.
    - For a dimensioned workshop drawing, use `{"op": "drawing", "filename": "part.dxf", "title": "...", "preview": "part.png"}`.
      It places front, plan and side views (ISO first angle by default) at a standard scale. Its overall and hole
      dimensions are checked against the model, and the `dimensions` list in the result gives their values.
+     Equal holes get one diameter with a count (`4x ⌀5.5`), and a hole table on the sheet (also `holes` in
+     the result) gives each vertical hole's X/Y from the lower-left corner of the plan view.
    - Re-run `drawing` after editing the model; it regenerates the page.
    - PDF and SVG pages need the FreeCAD GUI: the page is kept in the `.FCStd`.
 10. **Give finished parts a material** so they look right when opened in FreeCAD and in renders, and so
     `measure` reports masses: `{"op": "material", "targets": ["Rim"], "material": "aluminium"}`,
     `{"op": "material", "targets": ["Tire"], "material": "rubber"}`, or a colour for prints:
-    `{"op": "material", "targets": ["Case"], "material": "pla", "color": "#E03020"}`. Presets: steel,
-    stainless_steel, cast_iron, aluminium (+ _6061, _7075), titanium, copper, brass, bronze, gold, silver, chrome,
-    pla, abs, petg, nylon, pom, polypropylene, polycarbonate, acrylic, ptfe, pvc, rubber, glass, wood, concrete;
-    or any FreeCAD library material name. Materials of assembly parts go to their source objects.
-11. **Export** at the end. Each export is read back and verified; mesh exports report `closed` and `non_manifold`.
+    `{"op": "material", "targets": ["Case"], "material": "pla", "color": "#E03020"}`. Presets: steel
+    (+ _s235, _s355), stainless_steel, stainless_304, cast_iron, aluminium (+ _6061, _7075, _5754), titanium,
+    copper, brass, bronze, gold, silver, chrome, pla, abs, petg, nylon, nylon_pa12, pom, polypropylene,
+    polycarbonate, acrylic, ptfe, pvc, rubber, glass, wood, concrete; or any FreeCAD library material name.
+    Materials of assembly parts go to their source objects. `fem_static` uses the assigned material when it
+    is a specific grade (e.g. `steel_s235`, `aluminium_6061`).
+11. **Export** at the end. Each export is read back and verified. STEP files carry each part's name, and an
+    assembly as a product structure (`verified.part_names`). Mesh exports report `closed`, `non_manifold` and
+    `self_intersections`. The extension sets the format.
 
 ## Fixing errors
 
@@ -475,17 +365,34 @@ Don't resend an unchanged request after an error. Change what the error points a
 
 ## Limits
 
-- Profiles have no Sketcher dimensional constraints; edit them by resending `shapes`.
+- Only `rect`, `circle` and `slot` profiles are dimensioned and can take expressions; `polygon`, `spline` and
+  `path` profiles are fixed outlines, edited by resending `shapes`. Profiles lie in the XY, XZ or YZ plane
+  (with an `offset`), not on inclined planes.
 - Assemblies: no nested assemblies, no motion (gear, belt, screw) joints, and no limits. FEM is linear static only (no contact, buckling, thermal or modal analysis). Drawings are DXF only (PDF/SVG from the GUI); automatic dimensions
-  are the overall sizes and circle diameters only. PartDesign supports pad, pocket, revolution, groove, hole,
+  are the overall sizes and hole diameters, with hole positions in a table rather than as dimension lines, and
+  there are no section views or tolerances: tell the user when a drawing needs them. PartDesign supports pad, pocket, revolution, groove, hole,
   fillet, chamfer, shell, loft, sweep, mirror and linear/grid/polar patterns. No surface modelling (free-form
   patches, blends between arbitrary faces). Imported meshes stay faceted.
 - If a request needs something these operations can't do, tell the user it isn't supported. Don't work around
   the skill with your own FreeCAD scripts: they skip validation and checks.
 - Placement (`position`) values are literal numbers; expressions apply to dimensions.
+- The self-intersection check is skipped on results with more than 3000 faces (`self_intersection_check:
+  "skipped"` in the result). Shapes are checked when a request makes or changes them: a request that only
+  reads (`inspect`, `measure`, `export`, `render`) reports `results` without `valid`, and `inspect` of a whole
+  document lists objects without it. `inspect` one object for `valid` and `self_intersecting`.
+- A STEP import becomes one fixed solid (or compound): part names, colours and assembly structure of the
+  file are not kept.
 
 ## Compatibility
 
-Version 2 has breaking changes: v1 requests (`{"operation": ..., "parameters": ...}`) and
-`scripts/cad_engine.py` are no longer supported. Since 2.0.2 there is no `python` op: requests use only the
-operations above. Use only the format described here.
+Version 3 changes from version 2:
+
+- `export` has no `format` parameter any more: the file extension sets the format.
+- `fem_static`: `material` is optional (default: the part's assigned material) and must be a specific grade;
+  `aluminium_6061_t6` and `titanium_gr5` are still accepted as names for `aluminium_6061` and `titanium`.
+- A part added to an `assembly` without `position` stays where it was modelled (it used to move to the origin).
+- `inspect` without a target no longer reports `valid` per object, nor do the `results` of a request that
+  changes nothing.
+
+v1 requests (`{"operation": ..., "parameters": ...}`) and `scripts/cad_engine.py` are not supported, and there
+is no `python` op: requests use only the operations above. Use only the format described here.

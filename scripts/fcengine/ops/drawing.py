@@ -85,6 +85,46 @@ def _vertex_extremes(view: Any) -> Tuple[int, int, int, int]:
     return xmin, xmax, ymin, ymax
 
 
+MAX_TABLE_ROWS = 12
+
+
+def vertical_holes(shape: Any) -> List[Dict[str, Any]]:
+    """Round holes along Z (those a plan view shows as circles): diameter and centre, measured from the
+    minimum X/Y corner of the part. A hole is a full cylindrical face whose material lies outside it."""
+    import math
+
+    bb = geometry.tight_bbox(shape)
+    found: Dict[Tuple[float, float, float], Dict[str, Any]] = {}
+    for f in shape.Faces:
+        try:
+            surf = f.Surface
+            if type(surf).__name__ != "Cylinder" or abs(abs(surf.Axis.z) - 1) > 1e-6:
+                continue
+            u0, u1, v0, v1 = f.ParameterRange
+            if abs((u1 - u0) - 2 * math.pi) > 1e-6:
+                continue  # a rounded corner or slot end, not a full hole
+            u, v = (u0 + u1) / 2, (v0 + v1) / 2
+            radial = f.valueAt(u, v) - surf.Center
+            radial.z = 0
+            if f.normalAt(u, v).dot(radial) >= 0:
+                continue  # material inside the cylinder: a boss or pin
+            key = (round(surf.Radius, 4), round(surf.Center.x, 4), round(surf.Center.y, 4))
+            found.setdefault(
+                key,
+                {
+                    "diameter": geometry.num(2 * surf.Radius),
+                    "x": geometry.num(surf.Center.x - bb.XMin),
+                    "y": geometry.num(surf.Center.y - bb.YMin),
+                },
+            )
+        except Exception:
+            continue
+    holes = sorted(found.values(), key=lambda h: (h["diameter"], h["x"], h["y"]))
+    for k, h in enumerate(holes, start=1):
+        h["id"] = f"H{k}"
+    return holes
+
+
 def _remove_page(doc: Any, page: Any) -> None:
     # Collect names first: removing a view also removes its dimensions.
     names = [v.Name for v in page.Views] + [page.Name] + ([page.Template.Name] if page.Template is not None else [])
@@ -192,6 +232,8 @@ def drawing(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         t = views["top"]
         xmin, xmax, ymin, ymax = _vertex_extremes(t)
         add_dim(t, "DistanceY", [f"Vertex{ymin}", f"Vertex{ymax}"], W, "width (Y)", -(L * s / 2 + 10), 0)
+    holes = vertical_holes(shape) if p["dimensions"] == "overall_and_holes" else []
+    counted: List[Tuple[Any, int]] = []
     if p["dimensions"] == "overall_and_holes":
         seen = set()
         t = views["top"]
@@ -204,6 +246,10 @@ def drawing(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             seen.add(key)
             add_dim(t, "Diameter", [f"Edge{i}"], None, "diameter", c.Center.x + c.Radius + 6, c.Center.y + c.Radius + 6)
+            same = sum(1 for h in holes if abs(h["diameter"] / 2 - c.Radius) <= 1e-3)
+            if same > 1:  # "4x" before the value: one dimension stands for every hole of this size
+                dims[-1][0].FormatSpec = f"{same}x " + dims[-1][0].FormatSpec
+                counted.append((dims[-1][0], same))
 
     # Title block: the template's fields (FCStd/PDF) and a text block that is also written to the DXF.
     lines = [
@@ -217,6 +263,18 @@ def drawing(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         note.Text = [line]
         note.TextSize = 5.0 if k == 0 else 3.5
         note.X, note.Y = sheet_w - 80, 48 - 7 * k
+    # Hole table: where each hole is, from the part's lower-left corner in the plan view (X right, Y up).
+    table = [f"{h['id']}  dia {h['diameter']:g}  X {h['x']:g}  Y {h['y']:g}" for h in holes[:MAX_TABLE_ROWS]]
+    if len(holes) > MAX_TABLE_ROWS:
+        table.append(f"+ {len(holes) - MAX_TABLE_ROWS} more holes: see the hole list of the model")
+    if table:
+        table.insert(0, "HOLES (from lower-left corner of plan view, mm)")
+    for k, line in enumerate(table):
+        note = doc.addObject("TechDraw::DrawViewAnnotation", f"{page.Name}_Hole{k}")
+        page.addView(note)
+        note.Text = [line]
+        note.TextSize = 2.5
+        note.X, note.Y = MARGIN + 55, 54 - 3.6 * k
     if hasattr(tpl, "EditableTexts"):
         texts = dict(tpl.EditableTexts)
         values = {
@@ -238,6 +296,9 @@ def drawing(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
     for dim, expected, label in dims:
         raw = float(dim.getRawValue())
         entry = {"what": label, "value": geometry.num(raw), "text": dim.getText() if hasattr(dim, "getText") else None}
+        count = next((n for d, n in counted if d is dim), None)
+        if count:
+            entry["count"] = count
         if expected is None:  # a diameter: must be one of the model's circle diameters
             if not any(abs(raw / 2 - r) <= 1e-3 for r in model_radii):
                 raise SkillError(
@@ -277,6 +338,8 @@ def drawing(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         "projection": p["projection"],
         "views": list(views),
         "dimensions": results,
+        "holes": holes,
+        "hole_table_on_sheet": min(len(holes), MAX_TABLE_ROWS),
         "entities": dict(counts),
         "objects": [o.Name for o in objs],
     }

@@ -102,7 +102,7 @@ def visible_objects(doc: Any) -> List[Any]:
     return [o for o in doc.Objects if not o.TypeId.startswith(SKIP_TYPES_PREFIX)]
 
 
-def object_entry(obj: Any, detailed: bool = False) -> Dict[str, Any]:
+def object_entry(obj: Any, detailed: bool = False, validity: bool = True) -> Dict[str, Any]:
     entry: Dict[str, Any] = {"name": obj.Name}
     if obj.Label != obj.Name:
         entry["label"] = obj.Label
@@ -122,7 +122,7 @@ def object_entry(obj: Any, detailed: bool = False) -> Dict[str, Any]:
         entry["state"] = bad
         entry["error"] = obj.getStatusString()
     if geometry.is_part_shape(obj):
-        entry.update(geometry.summary(obj.Shape, detailed=detailed))
+        entry.update(geometry.summary(obj.Shape, detailed=detailed, validity=validity))
     return entry
 
 
@@ -140,6 +140,8 @@ class Context:
         self.mutated = False
         self.gui_before: Optional[Dict[str, Any]] = None  # GUI data of the file before the request
         self.appearance_changed: set = set()  # objects whose colour/material this request set
+        self.shapes_before: Dict[str, Any] = {}  # shape fingerprints at the start of the request
+        self.read_only = False  # the request has no step that changes the document
 
     # -------------------------------------------------------------- messages
     def warn(self, code: str, message: str) -> None:
@@ -248,7 +250,14 @@ class Context:
             "Check this object's dimensions (positive, in mm) and any expressions it uses; "
             "'inspect' with target shows its properties and expressions."
         )
-        if first.TypeId in ("Part::Fillet", "Part::Chamfer", "PartDesign::Fillet", "PartDesign::Chamfer"):
+        if "edge link" in msg.lower() or "missing element" in msg.lower():
+            # The edges/faces this feature was built on no longer exist (topological naming), not a size problem.
+            hint = (
+                f"'{first.Name}' refers to edges or faces by index, and an upstream change removed or renumbered "
+                f"them. Set its 'edges' (or 'open_faces') again with 'set', preferably as a selector such as "
+                "'|Z and %LINE', which is re-evaluated after every edit."
+            )
+        elif first.TypeId in ("Part::Fillet", "Part::Chamfer", "PartDesign::Fillet", "PartDesign::Chamfer"):
             hint = (hint or "") + _edge_size_hint(first)
         raise SkillError(
             errors.RECOMPUTE_FAILED,

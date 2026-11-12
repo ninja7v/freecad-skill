@@ -84,13 +84,29 @@ def measure(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         data["pairs"] = pairs
         data["min_distance"] = min(x["distance"] for x in pairs)
         data["interferences"] = sum(1 for x in pairs if x["status"] == "interfering")
+    rho_all = None
     if "material" in p or "density" in p:
-        rho = float(p["density"]) if "density" in p else _material_density(p["material"])
-        data["mass_g"] = {o.Name: geometry.num(o.Shape.Volume / 1000.0 * rho, 2) for o in objs}  # mm3 -> cm3
-        data["density_g_cm3"] = rho
+        rho_all = float(p["density"]) if "density" in p else _material_density(p["material"])
+        data["density_g_cm3"] = rho_all
     elif any(o.density for o in objs):  # materials assigned with the 'material' op
-        data["mass_g"] = {o.Name: geometry.num(o.Shape.Volume / 1000.0 * o.density, 2) for o in objs if o.density}
         data["mass_source"] = "assigned materials"
+    props: Dict[str, Any] = {}
+    for o in objs:
+        if not o.Shape.Solids:
+            continue
+        rho = rho_all or o.density
+        entry = {"volume": geometry.num(o.Shape.Volume, 3), "area": geometry.num(o.Shape.Area, 3)}
+        entry.update(geometry.mass_properties(o.Shape, rho))
+        props[o.Name] = entry
+    if props:
+        data["properties"] = props
+    weighed = {n: e for n, e in props.items() if "mass_g" in e}
+    if weighed:
+        data["mass_g"] = {n: geometry.num(e["mass_g"], 2) for n, e in weighed.items()}
+        if len(weighed) == len(props) and len(props) > 1:  # every part has a mass: the set as a whole
+            total = sum(e["mass_g"] for e in weighed.values())
+            com = [sum(e["mass_g"] * e["center_of_mass"][k] for e in weighed.values()) / total for k in range(3)]
+            data["total"] = {"mass_g": geometry.num(total, 2), "center_of_mass": [geometry.num(c) for c in com]}
     req = p.get("require") or {}
     failures = []
     if "min_clearance" in req:
@@ -118,8 +134,6 @@ def measure(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
             hint="Move or resize the parts; 'closest' gives the points where the gap is smallest.",
             details={"failures": failures, "pairs": pairs},
         )
-    if len(objs) < 2 and "mass_g" not in data:
-        ctx.warn("NOTHING_TO_COMPARE", "fewer than two objects: give 'objects', or add a material to get masses")
     return {"data": data}
 
 

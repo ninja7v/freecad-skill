@@ -102,7 +102,7 @@ def env_error(
 
 class Backend:
     def __init__(self, kind: str, cmd: Sequence[str] = (), source: str = "") -> None:
-        self.kind = kind  # "inprocess" | "subprocess"
+        self.kind = kind  # "python" (FreeCAD importable by this interpreter) | "subprocess" (FreeCADCmd)
         self.cmd = list(cmd)
         self.source = source
 
@@ -171,7 +171,8 @@ def find_freecad(explicit: Optional[str]) -> Optional[Backend]:
 
     try:
         if importlib.util.find_spec("FreeCAD") is not None:
-            return Backend("inprocess", source="python import")
+            # Still a separate process: a crash in the CAD kernel or a hang must not take the launcher with it.
+            return Backend("python", [sys.executable], "python import")
     except (ImportError, ValueError):
         pass
 
@@ -256,24 +257,6 @@ def _doc_rel(request: Any) -> str:
     return "model.FCStd"
 
 
-def run_inprocess(request: Any, root: Path) -> Dict[str, Any]:
-    from fcengine import runner
-
-    sys.stdout.flush()
-    saved = os.dup(1), os.dup(2)
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull, 1)
-        os.dup2(devnull, 2)
-        return runner.execute(request, root)
-    finally:
-        sys.stdout.flush()
-        os.dup2(saved[0], 1)
-        os.dup2(saved[1], 2)
-        for fd in (*saved, devnull):
-            os.close(fd)
-
-
 def _run_tree(cmd: List[str], env: Dict[str, str], cwd: Path, timeout: float) -> "subprocess.CompletedProcess[bytes]":
     """Run FreeCAD; on timeout kill it together with its children (Gmsh, CalculiX), not just FreeCAD."""
     posix = os.name == "posix"
@@ -327,6 +310,12 @@ def run_subprocess(backend: Backend, request: Any, root: Path, timeout: float) -
                 target = staged_ws / workspace.relative(root, real_doc)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(real_doc, target)
+            for rel in workspace.request_inputs(request):  # imported files and fonts the request names
+                src = workspace.resolve(root, rel)  # inside the workspace, or the request is refused
+                if src.is_file():
+                    target = staged_ws / workspace.relative(root, src)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, target)
             parts = root / library.CACHE_DIR / "parts"
             if library.library_refs(request) and parts.is_dir():  # downloaded library parts the request imports
                 shutil.copytree(parts, staged_ws / library.CACHE_DIR / "parts")
@@ -383,8 +372,6 @@ def execute(request: Any, root: Path, explicit: Optional[str], timeout: float) -
         doc = workspace.resolve(root, _doc_rel(request))
         # One request per document at a time; waits up to the request timeout.
         with doclock.DocumentLock(doc, timeout):
-            if backend.kind == "inprocess":
-                return run_inprocess(request, root)
             return run_subprocess(backend, request, root, timeout)
     except errors.SkillError as e:
         return errors.error_response(e, engine=__version__)
@@ -540,11 +527,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     }
     t0 = time.monotonic()
     try:
-        resp = (
-            run_inprocess(probe, base)
-            if backend.kind == "inprocess"
-            else run_subprocess(backend, probe, base, args.timeout)
-        )
+        resp = run_subprocess(backend, probe, base, args.timeout)
     finally:
         shutil.rmtree(base, ignore_errors=True)
     report["probe_seconds"] = round(time.monotonic() - t0, 2)

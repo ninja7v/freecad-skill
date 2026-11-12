@@ -105,29 +105,146 @@ def _check_overlaps(loops: List[List[Any]]) -> None:
                 )
 
 
-def fill_sketch(sk: Any, shapes: Any) -> None:
-    """(Re)build the geometry of ``sk`` from profile shapes."""
+def _evaluate(sk: Any, expr: str) -> float:
+    """Current value of an '=expression' used as a profile number, in mm."""
+    try:
+        v = sk.evalExpression(expr[1:].strip())
+    except Exception as e:
+        raise SkillError(
+            errors.INVALID_EXPRESSION,
+            f"Invalid expression in shapes: {expr!r}: {e}",
+            hint="Expressions use FreeCAD syntax, e.g. '=Params.width' or '=Params.width / 2 - 5'. "
+            "Parameters are created with set_params.",
+        ) from None
+    unit = getattr(v, "Unit", None)
+    if unit is not None and unit != App.Units.Unit() and unit != App.Units.Length:
+        raise SkillError(
+            errors.INVALID_EXPRESSION,
+            f"{expr!r} gives {v}, but profile coordinates are lengths",
+            hint="Use a parameter in mm (a plain number means mm).",
+        )
+    try:
+        return float(v.Value if hasattr(v, "Value") else v)
+    except (TypeError, ValueError):
+        raise SkillError(errors.INVALID_EXPRESSION, f"{expr!r} does not give a number") from None
+
+
+def _clear(sk: Any) -> None:
+    for prop, _expr in list(sk.ExpressionEngine):
+        if prop.lstrip(".").startswith("Constraints."):
+            sk.setExpression(prop, None)
+    if sk.GeometryCount:
+        sk.deleteAllGeometry()
+
+
+def _dimensions(shape: Any, numeric: Any, loop: List[Any], ids: List[int]) -> Any:
+    """Named dimensions that pin a rect, circle or slot completely: [(name, constraint, source value)].
+
+    Each number the agent wrote gets exactly one dimension, so a sketch made only of these shapes is fully
+    constrained, and an '=expression' number becomes an expression on its dimension. Returns None for
+    other shapes, and for degenerate layouts (a rect whose rounding swallows a whole side)."""
     import Sketcher
 
+    C = Sketcher.Constraint
+    lines = [g for seg, g in zip(loop, ids) if seg[0] == "line"]
+    arcs = [g for seg, g in zip(loop, ids) if seg[0] == "arc"]
+    out: List[Any] = []
+    if "circle" in shape:
+        g = ids[0]
+        cx, cy = numeric["circle"]
+        out += [("r", C("Radius", g, numeric["radius"]), shape["radius"])]
+        out += [("cx", C("DistanceX", -1, 1, g, 3, cx), shape["circle"][0])]
+        out += [("cy", C("DistanceY", -1, 1, g, 3, cy), shape["circle"][1])]
+        return out
+    if "rect" in shape:
+        r = float(numeric.get("corner_radius", 0) or 0)
+        if len(lines) != 4 or len(arcs) != (4 if r > 0 else 0):
+            return None
+        x0, y0, x1, y1 = numeric["rect"]
+        src = shape["rect"]
+        out += [(None, C("Horizontal", lines[0]), None), (None, C("Horizontal", lines[2]), None)]
+        out += [(None, C("Vertical", lines[1]), None), (None, C("Vertical", lines[3]), None)]
+        if r > 0:
+            out += [(None, C("Equal", arcs[0], a), None) for a in arcs[1:]]
+            out += [("r", C("Radius", arcs[0], r), shape.get("corner_radius"))]
+        # line order (see profiles._rounded_polygon): bottom, right, top, left
+        out += [("y0", C("DistanceY", -1, 1, lines[0], 1, y0), src[1])]
+        out += [("x1", C("DistanceX", -1, 1, lines[1], 1, x1), src[2])]
+        out += [("y1", C("DistanceY", -1, 1, lines[2], 1, y1), src[3])]
+        out += [("x0", C("DistanceX", -1, 1, lines[3], 1, x0), src[0])]
+        return out
+    if "slot" in shape:
+        if len(lines) != 2 or len(arcs) != 2:
+            return None
+        (ax, ay), (bx, by) = numeric["slot"]
+        end2, end1 = arcs  # segment order: line, arc around the second centre, line, arc around the first
+        out += [(None, C("Equal", end2, end1), None), ("r", C("Radius", end2, numeric["radius"]), shape["radius"])]
+        out += [("x1", C("DistanceX", -1, 1, end1, 3, ax), shape["slot"][0][0])]
+        out += [("y1", C("DistanceY", -1, 1, end1, 3, ay), shape["slot"][0][1])]
+        out += [("x2", C("DistanceX", -1, 1, end2, 3, bx), shape["slot"][1][0])]
+        out += [("y2", C("DistanceY", -1, 1, end2, 3, by), shape["slot"][1][1])]
+        return out
+    return None
+
+
+def _build(sk: Any, shapes: Any, numeric: Any, loops: List[List[Any]], dimension: bool) -> bool:
+    """Add geometry and constraints; False if the dimensioned sketch does not solve."""
+    import Sketcher
+
+    driven = []
+    for index, (shape, num, loop) in enumerate(zip(shapes, numeric, loops)):
+        ids = [sk.addGeometry(_geom(s), False) for s in loop]
+        dims = _dimensions(shape, num, loop, ids) if dimension and isinstance(shape, dict) else None
+        if not (loop[0][0] == "circle" or (loop[0][0] == "spline" and loop[0][2])):  # not a single closed curve
+            for k, seg in enumerate(loop):
+                nxt = (k + 1) % len(loop)
+                joint = App.Vector(*(seg[1][-1] if seg[0] == "spline" else seg[-1]), 0)
+                pk = _pos_at(sk, ids[k], joint)
+                pn = _pos_at(sk, ids[nxt], joint)
+                if pk and pn:
+                    # Coincident keeps the outline connected when edited in the GUI; where a dimensioned
+                    # shape's line meets its arc the join is also tangent (a rounded corner, a slot end).
+                    smooth = dims is not None and {seg[0], loop[nxt][0]} == {"line", "arc"}
+                    kind = "Tangent" if smooth else "Coincident"
+                    sk.addConstraint(Sketcher.Constraint(kind, ids[k], pk, ids[nxt], pn))
+        for name, constraint, source in dims or []:
+            i = sk.addConstraint(constraint)
+            if name is not None:
+                sk.renameConstraint(i, f"s{index}_{name}")
+                if profiles.is_expr(source):
+                    driven.append((f"s{index}_{name}", source))
+    for name, source in driven:
+        sk.setExpression(f"Constraints.{name}", source[1:].strip())
+    return not dimension or sk.solve() == 0
+
+
+def fill_sketch(sk: Any, shapes: Any) -> None:
+    """(Re)build the geometry of ``sk`` from profile shapes."""
     try:
-        loops = profiles.all_segments(shapes)
+        numeric = shapes
+        if profiles.has_expressions(shapes):
+            profiles.check_expressions(shapes)
+            numeric = profiles.resolve(shapes, lambda e: _evaluate(sk, e))
+        loops = profiles.all_segments(numeric)
     except profiles.ProfileError as e:
         raise SkillError(errors.INVALID_PARAM, str(e)) from None
     _check_overlaps(loops)
-    if sk.GeometryCount:
-        sk.deleteAllGeometry()
-    for loop in loops:
-        ids = [sk.addGeometry(_geom(s), False) for s in loop]
-        if loop[0][0] == "circle" or (loop[0][0] == "spline" and loop[0][2]):
-            continue  # a single closed curve
-        # Coincident constraints keep the outline connected when edited in the GUI.
-        for k, seg in enumerate(loop):
-            nxt = (k + 1) % len(loop)
-            joint = App.Vector(*(seg[1][-1] if seg[0] == "spline" else seg[-1]), 0)
-            pk = _pos_at(sk, ids[k], joint)
-            pn = _pos_at(sk, ids[nxt], joint)
-            if pk and pn:
-                sk.addConstraint(Sketcher.Constraint("Coincident", ids[k], pk, ids[nxt], pn))
+    _clear(sk)
+    try:
+        solved = _build(sk, shapes, numeric, loops, dimension=True)
+    except SkillError:
+        raise
+    except Exception:
+        solved = False
+    if not solved:
+        if profiles.has_expressions(shapes):
+            raise SkillError(
+                errors.RECOMPUTE_FAILED,
+                f"The profile of '{sk.Name}' could not be dimensioned with its expressions",
+                hint="Check that the expressions give a valid shape (x_max > x_min, radii that fit), or use numbers.",
+            )
+        _clear(sk)  # plain geometry, as drawn: still a valid profile, without dimensions
+        _build(sk, shapes, numeric, loops, dimension=False)
     setattr_json(sk, shapes)
 
 

@@ -1970,7 +1970,7 @@ class AssemblyTests(EngineCase):
                 (pair["a"], pair["b"], pair["status"]), ("Plate_Part", "Pin_Part", "touching")
             )  # pin seated in its bore
         data = self.step(r, -2)["data"]
-        self.assertAlmostEqual(data["density_g_cm3"], 7.9, places=2)  # FreeCAD's Steel-Generic, as in 'material'
+        self.assertAlmostEqual(data["density_g_cm3"], 7.85, places=2)  # the skill's own table, as in 'material'
         self.assertAlmostEqual(data["mass_g"]["Pin_Part"], PI * 9 * 30 / 1000 * data["density_g_cm3"], places=2)
 
 
@@ -2201,7 +2201,8 @@ class ExportTests(EngineCase):
         self.assertIn("doc", err["hint"])
 
     def test_export_errors(self):
-        self.run_err([BOX, {"op": "export", "filename": "a.step", "format": "stl"}], "INVALID_PARAM")
+        # v3: the extension alone sets the format; the redundant 'format' parameter is gone
+        self.run_err([BOX, {"op": "export", "filename": "a.step", "format": "stl"}], "INVALID_REQUEST")
         self.run_err([BOX, {"op": "export", "filename": "a.xyz"}], "INVALID_PARAM")
         self.run_err(
             [{"op": "set_params", "values": {"wall": 1}}, {"op": "export", "filename": "a.step"}], "EXPORT_FAILED"
@@ -2325,6 +2326,261 @@ class TextTests(EngineCase):
         self.run_err([{"op": "text", "text": "A", "size": 5, "height": 1, "font": "../x.ttf"}], "PATH_NOT_ALLOWED")
         self.run_ok([{"op": "text", "name": "T", "text": "A", "size": 5, "height": 1}])
         self.run_err([{"op": "set", "target": "T", "properties": {"text": ""}}], "INVALID_PARAM", new=False)
+
+
+class V3Tests(EngineCase):
+    """Behaviour added or fixed in 3.0."""
+
+    PLATE = {"op": "body", "name": "Plate"}
+
+    def test_parametric_profile_follows_parameters(self):
+        steps = [
+            {"op": "set_params", "values": {"wid": 90, "dep": 50, "bore": 6, "corner": 6}},
+            self.PLATE,
+            {
+                "op": "extrude",
+                "body": "Plate",
+                "name": "Base",
+                "height": 8,
+                "shapes": [
+                    {"rect": [0, 0, "=Params.wid", "=Params.dep"], "corner_radius": "=Params.corner"},
+                    {"circle": ["=Params.wid / 2", "=Params.dep / 2"], "radius": "=Params.bore"},
+                    {"slot": [[15, 15], [30, 15]], "radius": 3},
+                ],
+            },
+            {"op": "inspect", "target": "Base_Sketch"},
+        ]
+        r = self.run_ok(steps)
+        sk = self.step(r)["data"]
+        self.assertEqual(sk["sketch"], {"degrees_of_freedom": 0, "fully_constrained": True})
+        self.assertEqual(sk["expressions"][".Constraints.s0_x1"], "Params.wid")
+
+        def volume(w, d, c, b):
+            return 8 * (w * d - (4 - PI) * c * c - PI * b * b - (15 * 6 + PI * 9))
+
+        self.assertVolume(self.result(r, "Plate"), volume(90, 50, 6, 6))
+        r = self.run_ok([{"op": "set_params", "values": {"wid": 120, "corner": 10}}], new=False)
+        self.assertVolume(self.result(r, "Plate"), volume(120, 50, 10, 6))
+        self.assertBBox(self.result(r, "Plate"), [0, 0, 0], [120, 50, 8])
+        # literal shapes are dimensioned too, and can be redrawn
+        r = self.run_ok(
+            [
+                {"op": "set", "target": "Base", "properties": {"shapes": [{"rect": [0, 0, 40, 20]}]}},
+                {"op": "inspect", "target": "Base_Sketch"},
+            ],
+            new=False,
+        )
+        self.assertTrue(self.step(r)["data"]["sketch"]["fully_constrained"])
+        self.assertNotIn("expressions", self.step(r)["data"])
+        self.assertVolume(self.result(r, "Plate"), 8 * 40 * 20)
+
+    def test_expression_rules(self):
+        err = self.run_err(
+            [{"op": "extrude", "height": 2, "shapes": [{"polygon": [[0, 0], ["=Params.a", 0], [5, 5]]}]}],
+            "INVALID_REQUEST",
+        )
+        self.assertIn("rect, circle and slot", err["details"]["problems"][0]["message"])
+        self.run_err(
+            [{"op": "sweep", "shapes": [{"circle": [0, 0], "radius": "=Params.a"}], "path": [[0, 0, 0], [0, 0, 9]]}],
+            "INVALID_REQUEST",
+        )
+        self.run_err(
+            [{"op": "extrude", "height": 2, "shapes": [{"circle": [0, 0], "radius": "=Params.missing"}]}],
+            "INVALID_EXPRESSION",
+        )
+        self.run_err(
+            [
+                {"op": "set_params", "values": {"tilt": "15 deg"}},
+                {"op": "extrude", "height": 2, "shapes": [{"circle": [0, 0], "radius": "=Params.tilt"}]},
+            ],
+            "INVALID_EXPRESSION",
+        )
+        # stand-alone (Part) extrusions take expressions too
+        r = self.run_ok(
+            [
+                {"op": "set_params", "values": {"dia": 10}},
+                {
+                    "op": "extrude",
+                    "name": "Disc",
+                    "height": 2,
+                    "shapes": [{"circle": [0, 0], "radius": "=Params.dia / 2"}],
+                },
+                {"op": "set_params", "values": {"dia": 20}},
+            ]
+        )
+        self.assertVolume(self.result(r, "Disc"), PI * 100 * 2)
+
+    def test_self_intersecting_sweep_is_reported(self):
+        spring = {"op": "sweep", "name": "Spring", "shapes": [{"circle": [0, 0], "radius": 3}]}
+        r = self.run_ok(
+            [
+                dict(spring, helix={"radius": 10, "pitch": 4, "height": 20}),
+                {"op": "export", "filename": "s.step"},
+                {"op": "export", "filename": "s.stl"},
+            ]
+        )
+        codes = [w["code"] for w in r["warnings"]]
+        self.assertIn("SELF_INTERSECTION", codes)
+        self.assertIn("MESH_SELF_INTERSECTION", codes)
+        self.assertTrue(self.result(r, "Spring")["self_intersecting"])
+        self.assertEqual(r["exports"][0]["verified"]["self_intersecting"], ["Spring"])
+        r = self.run_ok([dict(spring, helix={"radius": 10, "pitch": 8, "height": 20})])
+        self.assertNotIn("warnings", r)
+        self.assertNotIn("self_intersecting", self.result(r, "Spring"))
+
+    def test_step_keeps_names_placement_and_assembly_structure(self):
+        r = self.run_ok(
+            [
+                {"op": "box", "name": "Plate", "length": 80, "width": 50, "height": 6},
+                {"op": "cylinder", "name": "Pin", "radius": 3, "height": 20, "position": [100, 0, 0]},
+                {"op": "export", "filename": "parts.step"},
+                {
+                    "op": "assembly",
+                    "name": "Asm",
+                    "parts": [
+                        {"object": "Plate"},
+                        {"object": "Pin"},
+                        {"object": "Pin", "name": "Pin2", "position": [0, 0, 50]},
+                    ],
+                },
+                {"op": "export", "filename": "asm.step"},
+            ]
+        )
+        for record in r["exports"]:
+            self.assertTrue(record["verified"]["part_names"], record)
+        parts = (self.ws / "parts.step").read_text()
+        self.assertIn("PRODUCT('Plate'", parts)
+        self.assertIn("PRODUCT('Pin'", parts)
+        asm = (self.ws / "asm.step").read_text()
+        self.assertEqual(asm.count("NEXT_ASSEMBLY_USAGE_OCCURRENCE("), 3)  # three placed parts...
+        self.assertEqual(asm.count("PRODUCT('Pin'"), 1)  # ...of which the pin is defined once
+        # a part keeps the place it was modelled at, instead of jumping to the origin into the plate
+        data = r["steps"][3]["data"]
+        self.assertEqual(data["interferences"], [])
+        self.assertEqual(self.step(r, 3)["bbox"]["max"][0], 103.0)
+        self.assertEqual([(b["part"], b["quantity"]) for b in data["bom"]], [("Plate", 1), ("Pin", 2)])
+
+    def test_mass_properties(self):
+        r = self.run_ok(
+            [
+                {"op": "box", "name": "B", "length": 80, "width": 50, "height": 6},
+                {"op": "sphere", "name": "S", "radius": 5, "position": [200, 0, 0]},
+                {"op": "measure", "objects": ["B", "S"], "density": 2.0},
+                {"op": "measure", "objects": ["B"]},
+                {"op": "inspect", "target": "B"},
+            ]
+        )
+        data = r["steps"][2]["data"]
+        box = data["properties"]["B"]
+        mass = 80 * 50 * 6 / 1000 * 2.0
+        self.assertAlmostEqual(box["mass_g"], mass, places=3)
+        self.assertEqual(box["center_of_mass"], [40.0, 25.0, 3.0])
+        self.assertAlmostEqual(box["inertia_g_mm2"]["ixx"], mass * (50**2 + 6**2) / 12, delta=0.01)
+        self.assertAlmostEqual(box["inertia_g_mm2"]["izz"], mass * (80**2 + 50**2) / 12, delta=0.01)
+        self.assertAlmostEqual(box["principal_inertia_g_mm2"][0], mass * (50**2 + 6**2) / 12, delta=0.01)
+        ms = 4 / 3 * PI * 125 / 1000 * 2.0
+        self.assertAlmostEqual(data["total"]["mass_g"], mass + ms, places=1)
+        self.assertAlmostEqual(data["total"]["center_of_mass"][0], (mass * 40 + ms * 200) / (mass + ms), places=2)
+        geo = r["steps"][3]["data"]["properties"]["B"]  # no density: geometric inertia
+        self.assertAlmostEqual(geo["inertia_mm5"]["ixx"], 24000 * (50**2 + 6**2) / 12, delta=1)
+        self.assertNotIn("mass_g", r["steps"][3]["data"])
+        self.assertIn("inertia_mm5", r["steps"][4]["data"])
+
+    def test_fem_uses_the_assigned_material(self):
+        beam = {"op": "box", "name": "Beam", "length": 100, "width": 10, "height": 10}
+        fem = {
+            "op": "fem_static",
+            "target": "Beam",
+            "fixed": "<X",
+            "loads": [{"faces": ">X", "force": "100 N", "direction": [0, 0, -1]}],
+            "convergence": False,
+        }
+        err = self.run_err([beam, fem], "INVALID_PARAM")
+        self.assertIn("steel_s235", err["hint"])
+        err = self.run_err([beam, {"op": "material", "targets": ["Beam"], "material": "steel"}, fem], "INVALID_PARAM")
+        self.assertIn("generic", err["message"])
+        r = self.run_ok([beam, {"op": "material", "targets": ["Beam"], "material": "aluminium_6061"}, fem])
+        data = self.step(r)["data"]
+        self.assertEqual((data["material"], data["yield_mpa"]), ("aluminium_6061", 276))
+        # deflection F L^3 / (3 E I)
+        self.assertAlmostEqual(data["max_displacement_mm"], 100 * 100**3 / (3 * 68900 * 10**4 / 12), delta=0.03)
+        r = self.run_ok([beam, dict(fem, material="aluminium_6061_t6")])  # the 2.x name still works
+        self.assertEqual(self.step(r)["data"]["material"], "aluminium_6061")
+
+    def test_shell_open_faces_can_be_set_by_index(self):
+        r = self.run_ok(
+            [
+                {"op": "box", "name": "B", "length": 40, "width": 30, "height": 20},
+                {"op": "shell", "name": "S", "target": "B", "thickness": 2, "open_faces": ">Z"},
+                {"op": "set", "target": "S", "properties": {"open_faces": [1]}},
+                {"op": "inspect", "target": "S"},
+            ]
+        )
+        data = self.step(r)["data"]
+        self.assertEqual(data["properties"]["Faces"], ["B", ["Face1"]])
+        self.assertNotIn("selector", data)
+
+    def test_skill_properties_are_protected_and_hints_are_right(self):
+        steps = [
+            {"op": "box", "name": "B", "length": 40, "width": 30, "height": 20},
+            {"op": "cylinder", "name": "C", "radius": 4, "height": 30, "position": [20, 15, -5]},
+            {"op": "cut", "name": "K", "base": "B", "tool": "C"},
+            {"op": "fillet", "name": "F", "target": "K", "radius": 2, "edges": [1, 2]},
+        ]
+        self.run_err(steps + [{"op": "set", "target": "F", "properties": {"FCSkillHelpers": ["x"]}}], "INVALID_PARAM")
+        # moving the hole onto the box edge renumbers the edges the fillet was built on
+        err = self.run_err(steps + [{"op": "move", "target": "C", "offset": [-20, 0, 0]}], "RECOMPUTE_FAILED")
+        self.assertIn("selector", err["hint"])
+        self.assertNotIn("too large", err["hint"])
+
+    def test_deep_boolean_chain_warns_once_and_tree_inspect_skips_validity(self):
+        n = 14
+        steps = [{"op": "box", "name": "P0", "length": 10 * n + 10, "width": 30, "height": 6}]
+        for i in range(n):
+            steps.append(
+                {"op": "cylinder", "name": f"C{i}", "radius": 3, "height": 8, "position": [10 + 10 * i, 15, -1]}
+            )
+            steps.append({"op": "cut", "name": f"P{i + 1}", "base": f"P{i}", "tool": f"C{i}"})
+        r = self.run_ok(steps + [{"op": "inspect"}], brief=True)
+        self.assertEqual([w["code"] for w in r["warnings"]], ["DEEP_CHAIN"])
+        self.assertNotIn("bbox", r["steps"][0])  # brief: no per-step geometry
+        self.assertIn("valid", r["results"][0])
+        tree = self.step(r)["data"]["objects"]
+        self.assertTrue(all("valid" not in o and "volume" in o for o in tree))
+
+    def test_drawing_counts_holes_and_lists_their_positions(self):
+        r = self.run_ok(
+            [
+                self.PLATE,
+                {
+                    "op": "extrude",
+                    "body": "Plate",
+                    "name": "Base",
+                    "height": 8,
+                    "shapes": [{"rect": [0, 0, 80, 50], "corner_radius": 5}, {"circle": [40, 25], "radius": 8}],
+                },
+                {
+                    "op": "hole",
+                    "body": "Plate",
+                    "at": [[10, 10], [70, 10], [10, 40], [70, 40]],
+                    "offset": 8,
+                    "diameter": 5.5,
+                },
+                {"op": "place", "target": "Plate", "position": [100, 200, 0]},
+                {"op": "drawing", "filename": "d.dxf"},
+            ]
+        )
+        data = self.step(r)["data"]
+        by_value = {d["value"]: d for d in data["dimensions"] if d["what"] == "diameter"}
+        self.assertEqual(by_value[5.5]["count"], 4)
+        self.assertTrue(by_value[5.5]["text"].startswith("4x"))
+        self.assertNotIn("count", by_value[16.0])
+        self.assertEqual(
+            [(h["diameter"], h["x"], h["y"]) for h in data["holes"]],
+            [(5.5, 10.0, 10.0), (5.5, 10.0, 40.0), (5.5, 70.0, 10.0), (5.5, 70.0, 40.0), (16.0, 40.0, 25.0)],
+        )
+        dxf = (self.ws / "d.dxf").read_text(errors="replace")
+        self.assertIn("H5  dia 16  X 40  Y 25", dxf)
 
 
 class RemovedPythonOpTests(EngineCase):

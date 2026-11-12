@@ -174,19 +174,13 @@ def _targets(ctx: Context, p: Dict[str, Any]) -> List[Any]:
     return objs
 
 
-def _write_brep_like(fmt: str, objs: List[Any], path: Path, shown: str) -> Dict[str, Any]:
+def _readback(objs: List[Any], path: Path, fmt: str) -> Any:
+    """Read the file back and compare it with the model: (checks, mismatch); checks is None if it is empty."""
     import Part
 
-    if all(o.isDerivedFrom("Part::Feature") for o in objs):
-        Part.export(objs, str(path))  # keeps object names
-    else:  # assemblies: Part.export writes nothing; export their placed compound
-        compound = Part.makeCompound([o.Shape for o in objs])
-        {"step": compound.exportStep, "iges": compound.exportIges, "brep": compound.exportBrep}[fmt](str(path))
-    if not path.exists() or path.stat().st_size == 0:
-        raise SkillError(errors.EXPORT_FAILED, f"FreeCAD wrote no data to {shown}")
     back = Part.read(str(path))
     if back.isNull() or not back.Faces:
-        raise SkillError(errors.EXPORT_FAILED, f"{shown} reads back as an empty shape")
+        return None, True
     want_bb = geometry.bbox(Part.makeCompound([o.Shape for o in objs]))
     got_bb = geometry.bbox(back)
     checks: Dict[str, Any] = {"faces": len(back.Faces), "bbox_size": got_bb["size"] if got_bb else None}
@@ -201,11 +195,78 @@ def _write_brep_like(fmt: str, objs: List[Any], path: Path, shown: str) -> Dict[
         mismatch = (
             mismatch or len(back.Solids) != want_solids or abs(back.Volume - want_vol) > 1e-3 * max(want_vol, 1.0)
         )
+    return checks, mismatch
+
+
+def _step_names(path: Path) -> List[str]:
+    """Product names written to a STEP file, in file order."""
+    import re
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return list(dict.fromkeys(re.findall(r"PRODUCT\(\s*'((?:[^']|'')*)'", text)))
+
+
+def _write_step(objs: List[Any], path: Path) -> bool:
+    """STEP with one named product per part, and assemblies as a product structure (each part once,
+    placed as often as it is used). Returns False if only the plain writer worked (anonymous shapes)."""
+    import Part
+
+    try:
+        import Import
+
+        # legacy=False, keepPlacement=True: without the second flag a single part is written at the origin.
+        Import.export(objs, str(path), False, True)
+        if path.exists() and path.stat().st_size > 0 and not _readback(objs, path, "step")[1]:
+            return True
+    except Exception:
+        pass
+    if all(o.isDerivedFrom("Part::Feature") for o in objs):
+        Part.export(objs, str(path))
+    else:
+        Part.makeCompound([o.Shape for o in objs]).exportStep(str(path))
+    return False
+
+
+def _write_brep_like(fmt: str, objs: List[Any], path: Path, shown: str, ctx: Context) -> Dict[str, Any]:
+    import Part
+
+    structured = None
+    if fmt == "step":
+        structured = _write_step(objs, path)
+    elif all(o.isDerivedFrom("Part::Feature") for o in objs):
+        Part.export(objs, str(path))
+    else:  # assemblies: Part.export writes nothing; export their placed compound
+        compound = Part.makeCompound([o.Shape for o in objs])
+        {"iges": compound.exportIges, "brep": compound.exportBrep}[fmt](str(path))
+    if not path.exists() or path.stat().st_size == 0:
+        raise SkillError(errors.EXPORT_FAILED, f"FreeCAD wrote no data to {shown}")
+    checks, mismatch = _readback(objs, path, fmt)
+    if checks is None:
+        raise SkillError(errors.EXPORT_FAILED, f"{shown} reads back as an empty shape")
+    want_bb = geometry.bbox(Part.makeCompound([o.Shape for o in objs]))
     if mismatch:
         raise SkillError(
             errors.EXPORT_FAILED,
             f"Read-back of {shown} does not match the model",
             details={"expected_bbox": want_bb, "actual": checks},
+        )
+    if structured is not None:
+        names = _step_names(path)
+        wanted = [o.Label for o in objs]
+        checks["part_names"] = bool(structured) and all(w in names for w in wanted)
+        if not checks["part_names"]:
+            ctx.warn(
+                "STEP_NAMES",
+                f"{shown} was written without part names or assembly structure (this FreeCAD build's structured "
+                "STEP writer failed); the geometry is complete and verified",
+            )
+    bad = [o.Name for o in objs if geometry.self_intersects(o.Shape)]
+    if bad:
+        checks["self_intersecting"] = bad
+        ctx.warn(
+            "SELF_INTERSECTION",
+            f"{shown}: {bad} pass through themselves; other CAD systems may reject the file or compute wrong "
+            "volumes. Fix the geometry before handing it over.",
         )
     return checks
 
@@ -234,6 +295,16 @@ def _write_mesh(objs: List[Any], path: Path, tol: float, ang_deg: float, ctx: Co
     }
     if back.CountFacets == 0:
         raise SkillError(errors.EXPORT_FAILED, f"{shown} contains no triangles")
+    try:
+        checks["self_intersections"] = bool(back.hasSelfIntersections())
+    except Exception:
+        pass
+    if checks.get("self_intersections"):
+        ctx.warn(
+            "MESH_SELF_INTERSECTION",
+            f"{shown} has triangles that cut through each other (the model overlaps itself, or separate "
+            "exported solids overlap); slicers may print it wrongly. Fix the model, or fuse the overlapping parts.",
+        )
     if not checks["closed"] or checks["non_manifold"]:
         ctx.warn("MESH_NOT_WATERTIGHT", f"{shown} is not a closed manifold mesh; slicers may reject it")
     if want > 0 and abs(back.Volume - want) > 0.02 * want:
@@ -254,21 +325,13 @@ def export(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
             "send a request with that 'doc' path instead.",
         )
     ext = dest.suffix.lower()
-    fmt = p.get("format") or EXTENSIONS.get(ext)
+    fmt = EXTENSIONS.get(ext)
     if fmt is None:
         raise SkillError(
             errors.INVALID_PARAM,
-            f"Cannot infer the format from '{dest.name}'",
-            hint=f"Use one of the extensions {sorted(EXTENSIONS)} or give 'format'.",
+            f"Cannot export to '{dest.name}': unknown extension '{ext}'",
+            hint=f"The extension sets the format. Use one of {sorted(EXTENSIONS)}.",
         )
-    if EXTENSIONS.get(ext) != fmt:
-        raise SkillError(
-            errors.INVALID_PARAM,
-            f"Extension '{ext}' does not match format '{fmt}'",
-            hint=f"Name the file e.g. '{dest.stem}.{fmt}'.",
-        )
-    if dest.suffix.lower() == ".fcstd" or dest == ctx.doc_path:
-        raise SkillError(errors.PATH_NOT_ALLOWED, "Refusing to overwrite the model document")
     if any(pe["dest"] == dest for pe in ctx.pending_exports):
         raise SkillError(errors.INVALID_PARAM, f"'{p['filename']}' is already exported earlier in this request")
     objs = _targets(ctx, p)
@@ -297,7 +360,7 @@ def export(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         elif fmt in FLAT_FORMATS:
             checks = _write_flat(fmt, objs, tmp, p.get("view", "top"), dest.name)
         else:
-            checks = _write_brep_like(fmt, objs, tmp, dest.name)
+            checks = _write_brep_like(fmt, objs, tmp, dest.name, ctx)
     except SkillError:
         if tmp.exists():
             os.remove(tmp)

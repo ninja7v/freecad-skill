@@ -1,7 +1,8 @@
 ## Description:
 
 Create, edit, inspect, verify and export parametric 3D CAD models in FreeCAD from structured JSON operations: parts,
-PartDesign bodies (including threaded holes), text, assemblies, DXF drawings and linear stress analysis. Closed
+PartDesign bodies with parameter-driven sketches (including threaded holes), text, assemblies with a bill of
+materials, mass properties, DXF drawings and linear stress analysis. Closed
 meshes (STL, OBJ, 3MF) in the workspace can be imported as solids and modified.
 
 This skill is ready for commercial/non-commercial use.
@@ -30,7 +31,7 @@ Mitigation: All paths are confined to the workspace directory (no `..`, absolute
 
 Risk: Generated geometry may not match the user's intent.
 
-Mitigation: Every step reports volumes and exact bounding boxes, and agents can assert expected dimensions; review models before manufacturing.
+Mitigation: Every step reports volumes and exact bounding boxes, and agents can assert expected dimensions; results are checked for validity and self-intersection, and exports are read back; review models before manufacturing.
 
 Risk: Stress analysis (`fem_static`) results may be relied on for safety-critical parts.
 
@@ -57,7 +58,7 @@ Mitigation: Network is used only by the library command and by import steps that
 
 ## Skill Version(s):
 
-2.0.3
+3.0.0
 
 ## Ethical Considerations:
 

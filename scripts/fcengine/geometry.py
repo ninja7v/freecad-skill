@@ -43,6 +43,7 @@ def bbox(shape: Any) -> Optional[Dict[str, List[float]]]:
 
 
 _VALID: Dict[int, Tuple[Any, bool]] = {}
+VALID_CACHE = 512
 
 
 def is_valid(shape: Any) -> bool:
@@ -54,33 +55,105 @@ def is_valid(shape: Any) -> bool:
     if hit is not None and hit[0].isSame(shape):
         return hit[1]
     valid = bool(shape.isValid())
-    if len(_VALID) >= 64:
-        _VALID.clear()
+    while len(_VALID) >= VALID_CACHE:
+        _VALID.pop(next(iter(_VALID)))  # oldest entry first
     _VALID[key] = (shape, valid)
     return valid
 
 
-def summary(shape: Any, detailed: bool = False) -> Dict[str, Any]:
-    """Compact geometric summary of a shape."""
+# Self-intersection check (OCC's boolean-argument checker). isValid() does not see a solid that passes
+# through itself, e.g. a spring whose wire is thicker than its pitch: such a solid has a wrong volume and
+# breaks later booleans. The check is slower than isValid, so it is skipped above this face count.
+SELF_CHECK_MAX_FACES = 3000
+_SELF: Dict[int, Tuple[Any, Optional[bool]]] = {}
+
+
+def self_intersects(shape: Any) -> Optional[bool]:
+    """True/False, or None when the check was skipped (too many faces) or could not run.
+
+    Solids are checked one by one: separate solids of a compound may overlap on purpose (parts of an
+    assembly, unfused array instances), which is reported elsewhere."""
+    if shape is None or shape.isNull():
+        return None
+    key = shape.hashCode()
+    hit = _SELF.get(key)
+    if hit is not None and hit[0].isSame(shape):
+        return hit[1]
+    result: Optional[bool]
+    if len(shape.Faces) > SELF_CHECK_MAX_FACES:
+        result = None
+    else:
+        result = False
+        for solid in shape.Solids:
+            try:
+                solid.check(True)
+            except Exception as e:
+                if "SelfIntersect" in str(e):
+                    result = True
+                    break
+    while len(_SELF) >= VALID_CACHE:
+        _SELF.pop(next(iter(_SELF)))
+    _SELF[key] = (shape, result)
+    return result
+
+
+def summary(shape: Any, detailed: bool = False, validity: bool = True) -> Dict[str, Any]:
+    """Compact geometric summary of a shape. ``validity=False`` leaves out the (slow) validity check."""
     if shape is None or shape.isNull():
         return {"empty": True}
     out: Dict[str, Any] = {
         "volume": num(shape.Volume, 3),
         "bbox": bbox(shape),
         "solids": len(shape.Solids),
-        "valid": is_valid(shape),
     }
+    if validity:
+        out["valid"] = is_valid(shape)
     if detailed:
         out["area"] = num(shape.Area, 3)
         out["faces"] = len(shape.Faces)
         out["edges"] = len(shape.Edges)
-        if shape.Solids:
-            try:
-                out["center_of_mass"] = vec(
-                    shape.Solids[0].CenterOfMass if len(shape.Solids) == 1 else _compound_com(shape)
-                )
-            except Exception:
-                pass
+        out.update(mass_properties(shape))
+    return out
+
+
+def center_of_mass(shape: Any) -> Optional[Any]:
+    try:
+        if not shape.Solids:
+            return None
+        return shape.Solids[0].CenterOfMass if len(shape.Solids) == 1 else _compound_com(shape)
+    except Exception:
+        return None
+
+
+def mass_properties(shape: Any, density: Optional[float] = None) -> Dict[str, Any]:
+    """Centre of mass and inertia of the solids of ``shape``.
+
+    Without a density the inertia is geometric (volume-weighted, mm^5): multiply by the density to get
+    a mass moment. With ``density`` (g/cm3) it is in g*mm2, and the mass in g. The inertia tensor is taken
+    about the centre of mass, along the global X/Y/Z axes."""
+    com = center_of_mass(shape)
+    if com is None:
+        return {}
+    out: Dict[str, Any] = {"center_of_mass": vec(com)}
+    k = 1.0 if density is None else density / 1000.0  # g/cm3 -> g/mm3
+    try:
+        m = shape.MatrixOfInertia
+        key = "inertia_mm5" if density is None else "inertia_g_mm2"
+        out[key] = {
+            "ixx": num(m.A11 * k, 3),
+            "iyy": num(m.A22 * k, 3),
+            "izz": num(m.A33 * k, 3),
+            "ixy": num(m.A12 * k, 3),
+            "ixz": num(m.A13 * k, 3),
+            "iyz": num(m.A23 * k, 3),
+        }
+        if len(shape.Solids) == 1:
+            pp = shape.Solids[0].PrincipalProperties
+            out["principal_" + key] = sorted(num(x * k, 3) for x in pp["Moments"])
+    except Exception:
+        pass
+    if density is not None:
+        out["mass_g"] = num(shape.Volume * k, 3)
     return out
 
 

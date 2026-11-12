@@ -128,8 +128,9 @@ The output is a single JSON object on stdout. The exit code is `0` on success, `
 
 - **Solids:** `box`, `cylinder`, `sphere`, `cone`, `torus`, `prism`, `import` (STEP, IGES, BREP, FCStd,
   closed STL/OBJ/3MF meshes, FreeCAD library parts)
-- **Profiles:** `extrude`, `revolve`, from rounded rectangles, circles, slots, polygons and arc paths,
-  built as editable FreeCAD sketches
+- **Profiles:** `extrude`, `revolve`, `loft`, `sweep`, from rounded rectangles, circles, slots, polygons,
+  splines and arc paths. Rectangles, circles and slots are fully dimensioned sketches whose numbers can be
+  expressions (`"=Params.width"`), so outlines follow the parameters.
 - **PartDesign:** `body`, `hole` (ISO clearance and tap sizes, counterbore, countersink, modelled ISO
   threads). `extrude` and `revolve` with `body` make pads, pockets, revolutions and grooves. Fillets,
   chamfers, shells, patterns and mirrors work on bodies too.
@@ -141,10 +142,10 @@ The output is a single JSON object on stdout. The exit code is `0` on success, `
 - **Assemblies:** `assembly`, `joint` (fixed, revolute, cylindrical, slider, ball, parallel, perpendicular).
   Every joint is verified after solving, interferences are reported, and joints follow upstream edits.
 - **Editing:** `set`, `set_params`, `delete`, `rename`
-- **Queries:** `inspect`, `check`, `measure` (clearance, interference, mass), `fem_static` (linear stress
+- **Queries:** `inspect`, `check`, `measure` (clearance, interference, mass, centre of mass, inertia), `fem_static` (linear stress
   analysis with equilibrium and mesh-convergence checks, safety factor, stress map)
-- **Output:** `export` (including flat DXF/SVG outlines for laser cutting), `drawing` (dimensioned DXF
-  technical drawings), `render`
+- **Output:** `export` (STEP with part names and assembly structure; flat DXF/SVG outlines for laser
+  cutting), `drawing` (dimensioned DXF technical drawings with a hole table), `render`
 
 The full reference is in [docs/OPERATIONS.md](docs/OPERATIONS.md), generated from the code. The design and
 its trade-offs are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -179,6 +180,17 @@ an enclosure, a flanged bushing, a wheel, an L-bracket and a table. Each one ass
   which breaks arrays and copies on conda's macOS and Windows builds, so older versions are refused with
   `FREECAD_VERSION`. Verified by hand on Linux with FreeCAD 1.1 (snap); CI runs the suite on Linux, macOS
   and Windows with conda-forge FreeCAD 1.1. Report problems with other setups, including the output of `doctor`.
+
+## Breaking changes in v3
+
+- `export` has no `format` parameter: the file extension sets the format.
+- `fem_static` takes a specific material grade (or the part's assigned material); generic `steel` or
+  `aluminium` are refused. The 2.x grade names still work.
+- A part added to an `assembly` without a `position` stays where it was modelled instead of moving to the origin.
+- `inspect` of a whole document no longer reports `valid` per object, and requests that change nothing
+  report `results` without it (re-checking made large documents slow); `inspect` one object for it.
+- `material` and `measure` take densities from the skill's own table, e.g. 7.85 g/cm3 for `steel` (FreeCAD's
+  library says 7.9).
 
 ## Breaking changes in v2
 
@@ -215,8 +227,8 @@ To add an operation:
 
 ```bash
 python3 tests/run.py                                   # everything green first
-clawhub skill publish . --version 2.0.3 --dry-run      # check what will be uploaded
-clawhub skill publish . --version 2.0.3 \
+clawhub skill publish . --version 3.0.0 --dry-run      # check what will be uploaded
+clawhub skill publish . --version 3.0.0 \
   --categories development,creative --topics cad,freecad,3d-printing,step,parametric
 clawhub scan --slug freecad-skill                      # read the security report
 ```

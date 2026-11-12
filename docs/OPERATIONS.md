@@ -413,7 +413,7 @@ Repeat an object 'count' times, each copy offset by 'step' (parametric Draft arr
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `target` | name | **yes** |  |  | Object to operate on. |
-| `count` | integer | **yes** |  | ≥ 2 | Total number of instances, including the original. |
+| `count` | integer | **yes** |  | ≥ 2; ≤ 1000 | Total number of instances, including the original. |
 | `step` | vector | **yes** |  |  | Offset between consecutive instances. |
 | `fuse` | bool |  | `true` |  | Fuse touching instances into one solid. |
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('LinearArray', 'LinearArray001', ...). |
@@ -431,11 +431,11 @@ Rectangular grid of an object along X and Y (optionally Z) (parametric Draft arr
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `target` | name | **yes** |  |  | Object to operate on. |
-| `count_x` | integer | **yes** |  | ≥ 1 | Instances along X. |
-| `count_y` | integer | **yes** |  | ≥ 1 | Instances along Y. |
+| `count_x` | integer | **yes** |  | ≥ 1; ≤ 1000 | Instances along X. |
+| `count_y` | integer | **yes** |  | ≥ 1; ≤ 1000 | Instances along Y. |
 | `step_x` | number | **yes** |  |  | Spacing along X. |
 | `step_y` | number | **yes** |  |  | Spacing along Y. |
-| `count_z` | integer |  | `1` | ≥ 1 | Instances along Z. |
+| `count_z` | integer |  | `1` | ≥ 1; ≤ 1000 | Instances along Z. |
 | `step_z` | number |  | `0` |  | Spacing along Z. |
 | `fuse` | bool |  | `true` |  | Fuse touching instances into one solid. |
 | `name` | newname |  |  |  | Name of the new object (identifier). Default: auto ('GridArray', 'GridArray001', ...). |
@@ -453,7 +453,7 @@ Repeat an object around an axis (parametric Draft polar array).
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `target` | name | **yes** |  |  | Object to operate on. |
-| `count` | integer | **yes** |  | ≥ 2 | Total number of instances, including the original. |
+| `count` | integer | **yes** |  | ≥ 2; ≤ 1000 | Total number of instances, including the original. |
 | `angle` | number |  | `360` | > 0; ≤ 360 | Total angle. 360 spaces instances evenly around the circle; less than 360 puts the first and last instance at the ends of the arc. |
 | `axis` | vector |  | `[0, 0, 1]` |  | Rotation axis direction. |
 | `center` | vector |  | `[0, 0, 0]` |  | A point on the rotation axis. |
@@ -589,7 +589,7 @@ Give finished parts a material (FreeCAD material: density, mechanical data, appe
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `targets` | names | **yes** |  |  | Parts to set (solids, bodies, or assembly parts: the material goes to their source). |
-| `material` | string |  |  |  | Preset: steel, stainless_steel, cast_iron, aluminium, aluminium_6061, aluminium_7075, titanium, copper, brass, bronze, gold, silver, chrome, pla, abs, petg, nylon, pom, polypropylene, polycarbonate, acrylic, ptfe, pvc, rubber, glass, wood, concrete, default; or any FreeCAD library material name (e.g. 'Steel-C45E'). |
+| `material` | string |  |  |  | Preset: steel, steel_s235, steel_s355, stainless_steel, stainless_304, cast_iron, aluminium, aluminium_6061, aluminium_7075, aluminium_5754, titanium, copper, brass, bronze, gold, silver, chrome, pla, abs, petg, nylon, nylon_pa12, pom, polypropylene, polycarbonate, acrylic, ptfe, pvc, rubber, glass, wood, concrete, default; or any FreeCAD library material name (e.g. 'Steel-C45E'). Grades (steel_s235, aluminium_6061, ...) also carry the strength data 'fem_static' uses. |
 | `color` | color |  |  |  | Custom colour, '#RRGGBB' or [r, g, b] in 0..1 (e.g. a filament colour); overrides the material's look. |
 | `transparency` | integer |  |  | ≥ 0; ≤ 100 | Transparency in percent. |
 
@@ -621,7 +621,7 @@ Assert geometric expectations on an object; fails with EXPECTATION_FAILED if the
 
 ### `measure`
 
-Clearance and interference between objects (minimum distance, closest points, overlap volume) and, with a material, their mass. Use it to check that parts fit together.
+Clearance and interference between objects (minimum distance, closest points, overlap volume), and each object's mass properties: volume, area, centre of mass and inertia tensor, plus mass with a material. Use it to check that parts fit together and what they weigh.
 
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
@@ -630,7 +630,7 @@ Clearance and interference between objects (minimum distance, closest points, ov
 | `material` | string |  |  |  | Material for mass (g): a preset or FreeCAD library material name, as in the 'material' op (e.g. 'steel', 'pla', 'rubber'). Without it, materials assigned with 'material' are used. |
 | `density` | number |  |  | > 0 | Explicit density in g/cm3 (instead of 'material'). |
 
-Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0).
+Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0). 'properties' gives, per object, the inertia tensor about its centre of mass along the global axes: in g*mm2 ('inertia_g_mm2', with its principal moments) when a density is known, otherwise geometric ('inertia_mm5': multiply by the density in g/mm3). With masses for every object, 'total' gives the combined mass and centre of mass.
 
 ```json
 {"op": "measure", "objects": ["Lid", "Box"], "require": {"min_clearance": 0.3}}
@@ -643,10 +643,10 @@ Linear static stress analysis (Gmsh + CalculiX, 2nd-order elements): fixed faces
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `target` | name | **yes** |  |  | Object to operate on. |
-| `material` | enum | **yes** |  | `steel_s235` \| `steel_s355` \| `stainless_304` \| `aluminium_6061_t6` \| `aluminium_5754` \| `titanium_gr5` \| `brass` \| `pla` \| `petg` \| `abs` \| `nylon_pa12` | Material (E, Poisson, density, yield). |
+| `material` | string |  |  |  | Material grade with strength data (E, Poisson, density, yield): steel_s235, steel_s355, stainless_304, aluminium_6061, aluminium_7075, aluminium_5754, titanium, brass, pla, petg, abs, nylon_pa12. Default: the material assigned to the part with the 'material' op. Generic materials (steel, aluminium) are refused: their yield strength depends on the grade. |
 | `fixed` | selector | **yes** |  |  | Faces held fixed, e.g. '<X' (the bolted face). |
 | `loads` | loads | **yes** |  |  | List of {"faces": selector, "force": "500 N", "direction": [0, 0, -1]} (total force spread over the faces) or {"faces": selector, "pressure": "0.5 MPa"} (pushes into planar faces). |
-| `mesh_size` | number |  |  | > 0 | Element size in mm (default: about half the thinnest dimension). |
+| `mesh_size` | number |  |  | > 0 | Element size in mm. Default: about the wall thickness (estimated as 2 x volume / area), which suits deflection; give a smaller size for stresses near holes and corners (see convergence). |
 | `convergence` | bool |  | `true` |  | Solve twice (mesh size and 0.7x) and report how much the results change. |
 | `require` | object |  |  |  | Assertions that fail the step: {"min_safety_factor": 2} and/or {"max_displacement": 0.5} (mm). |
 | `report` | path |  |  |  | Write a PNG stress map (4 views). |
@@ -662,12 +662,11 @@ Estimates only: linear elastic, small deformations, no contact. Printed plastics
 
 ### `export`
 
-Export objects to STEP, IGES, BREP, STL, OBJ or 3MF, or as a flat 2D outline (DXF, SVG) for laser/CNC cutting, and verify the written file by reading it back.
+Export objects to STEP, IGES, BREP, STL, OBJ or 3MF, or as a flat 2D outline (DXF, SVG) for laser/CNC cutting, and verify the written file by reading it back. STEP files carry each part's name, and an assembly as a product structure (every part once, placed as often as it is used).
 
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
-| `filename` | path | **yes** |  |  | Output path relative to the workspace; the extension sets the format unless 'format' is given. |
-| `format` | enum |  |  | `step` \| `iges` \| `brep` \| `stl` \| `obj` \| `3mf` \| `dxf` \| `svg` | Explicit format. |
+| `filename` | path | **yes** |  |  | Output path relative to the workspace; the extension sets the format (.step/.stp, .iges/.igs, .brep, .stl, .obj, .3mf, .dxf, .svg). |
 | `view` | enum |  | `"top"` | `top` \| `bottom` \| `front` \| `back` \| `right` \| `left` | DXF/SVG: direction of the flat projection, in model millimetres (1:1). |
 | `targets` | names |  |  |  | Objects to export. Default: all result objects. |
 | `tolerance` | number |  | `0.05` | > 0 | Mesh formats: max chordal deviation in mm. |

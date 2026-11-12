@@ -205,6 +205,8 @@ def _set_alias(ctx: Context, obj: Any, key: str, value: Any) -> bool:
             apply_selector(obj, "open_faces", value, None)
             if selectors.is_dynamic(value):
                 ctx.set_selector(obj, "open_faces", value)
+            elif SEL_PROP in obj.PropertiesList:
+                obj.removeProperty(SEL_PROP)  # explicit indices replace the stored selector
         return True
     if t in ("Part::Extrusion", "Part::Revolution") and key in ("points", "shapes"):
         prof = obj.Base if t == "Part::Extrusion" else obj.Source
@@ -246,11 +248,11 @@ def set_(ctx: Context, p: Dict[str, Any]) -> Any:
         if key == "Label":
             _set_label(ctx, obj, value)
             continue
-        if key in PROTECTED_PROPS:
+        if key in PROTECTED_PROPS or key.startswith("FCSkill"):
             raise SkillError(
                 errors.INVALID_PARAM,
                 f"{obj.Name}.{key} cannot be set",
-                hint="It is computed by FreeCAD. Change the object's dimensions or inputs instead.",
+                hint="It is computed by FreeCAD or kept by the skill. Change the object's dimensions or inputs instead.",
             )
         try:
             if _set_alias(ctx, obj, key, value):

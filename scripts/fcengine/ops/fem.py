@@ -24,25 +24,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import FreeCAD as App
 
-from .. import errors, geometry, workspace
+from .. import errors, geometry, matdata, workspace
 from ..document import Context
 from ..errors import SkillError
 
-# E (MPa), Poisson, density (kg/m3), yield strength (MPa). Printed plastics are anisotropic and weaker
-# between layers: treat their safety factors with extra care.
-MATERIALS: Dict[str, Tuple[float, float, float, float]] = {
-    "steel_s235": (210000, 0.30, 7850, 235),
-    "steel_s355": (210000, 0.30, 7850, 355),
-    "stainless_304": (193000, 0.29, 8000, 215),
-    "aluminium_6061_t6": (68900, 0.33, 2700, 276),
-    "aluminium_5754": (70000, 0.33, 2670, 80),
-    "titanium_gr5": (113800, 0.34, 4430, 880),
-    "brass": (100000, 0.34, 8500, 200),
-    "pla": (3500, 0.36, 1240, 50),
-    "petg": (2100, 0.38, 1270, 45),
-    "abs": (2200, 0.35, 1040, 40),
-    "nylon_pa12": (1700, 0.40, 1010, 45),
-}
 DISCLAIMER = (
     "Linear static estimate (small deformations, linear elastic material, no contact). "
     "Not a substitute for engineering review; stresses at sharp inner corners are mesh-dependent."
@@ -472,6 +457,35 @@ def _report_png(ctx: Context, target: Any, field: Any, dest: Any, vmax: float) -
     return rec
 
 
+def _material(target: Any, name: Optional[str]) -> Tuple[str, Tuple[float, float, float, float]]:
+    """(preset name, (E MPa, Poisson, density kg/m3, yield MPa)) from 'material', else the part's own material."""
+    import json
+
+    from ..document import APPEARANCE_PROP
+
+    source = "'material'"
+    if name is None:
+        raw = getattr(target, APPEARANCE_PROP, "") if APPEARANCE_PROP in target.PropertiesList else ""
+        name = (json.loads(raw).get("material") if raw else None) or None
+        source = f"the material assigned to '{target.Name}'"
+        if name is None:
+            raise SkillError(
+                errors.INVALID_PARAM,
+                f"'{target.Name}' has no material: give 'material', or assign one with the 'material' op",
+                hint=f"Materials with strength data: {matdata.structural_names()}.",
+            )
+    key = matdata.canonical(name)
+    preset = matdata.PRESETS.get(key) if key else None
+    if preset is None or not preset.structural:
+        why = "is a generic material without a defined yield strength" if preset is not None else "is not known"
+        raise SkillError(
+            errors.INVALID_PARAM,
+            f"{source} ('{name}') {why}; a stress analysis needs a specific grade",
+            hint=f"Use one of {matdata.structural_names()}.",
+        )
+    return key, (preset.youngs_mpa, preset.poisson, preset.density * 1000.0, preset.yield_mpa)
+
+
 def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
     target = ctx.get(p["target"])
     shape = target.Shape
@@ -481,7 +495,7 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
             f"'{target.Name}' must be exactly one solid for FEM (it has {len(shape.Solids)})",
             hint="Fuse touching parts into one solid, or analyse each part separately.",
         )
-    mat = MATERIALS[p["material"]]
+    mat_name, mat = _material(target, p.get("material"))
     fixed = _faces(shape, p["fixed"], "fixed")
     loads = []
     for k, ld in enumerate(p["loads"]):
@@ -561,7 +575,7 @@ def fem_static(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
 
     applied = _applied(target, loads)
     data: Dict[str, Any] = {
-        "material": p["material"],
+        "material": mat_name,
         "youngs_modulus_mpa": mat[0],
         "yield_mpa": mat[3],
         "mesh": {

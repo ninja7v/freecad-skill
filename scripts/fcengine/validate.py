@@ -17,6 +17,7 @@ from .catalog import Op, Param
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,59}$")
 NONZERO_VECTORS = ("direction", "axis", "normal")
 MIN_SIZE = 1e-6  # mm; OCC's confusion tolerance is 1e-7
+MAX_INSTANCES = 5000  # array instances per op: beyond this FreeCAD takes minutes
 CELL_ADDRESS = re.compile(r"^[A-Za-z]{1,2}[0-9]+$")
 
 # Names FreeCAD rejects as spreadsheet aliases (unit symbols, constants, keywords),
@@ -336,6 +337,9 @@ def _check_value(p: Param, v: Any) -> Optional[str]:
         return "must be a number or [x, y, z]"
     if t == "shapes":
         try:
+            if profiles.has_expressions(v):
+                profiles.check_expressions(v)
+                return None
             profiles.all_segments(v)
         except profiles.ProfileError as e:
             return f"invalid: {e}"
@@ -474,6 +478,8 @@ def _static_op_checks(op: Op, params: Dict[str, Any], i: int, probs: Problems) -
         probs.add("give 'position' and/or 'rotation'", i, n)
     if n in ("extrude", "revolve") and "points" in params and "offset" in params:
         probs.add("'offset' applies to 'shapes'; with 'points' give 3D points instead", i, n, "offset")
+    if n == "sweep" and profiles.has_expressions(params.get("shapes")):
+        probs.add("'=expression' values are not supported in sweep profiles; give numbers", i, n, "shapes")
     if n == "set_params" and isinstance(params.get("values"), dict):
         for alias, value in params["values"].items():
             if not isinstance(alias, str) or not IDENTIFIER.match(alias) or CELL_ADDRESS.match(alias):
@@ -577,6 +583,11 @@ def _static_op_checks(op: Op, params: Dict[str, Any], i: int, probs: Problems) -
     if n == "linear_array" and _is_vector(params.get("step")) and all(c == 0 for c in params["step"]):
         probs.add("'step' must not be [0, 0, 0]: every copy would sit on the original", i, n, "step")
     if n == "grid_array":
+        counts = [params.get(f"count_{a}", 1) for a in ("x", "y", "z")]
+        if all(isinstance(c, int) and not isinstance(c, bool) for c in counts):
+            total = counts[0] * counts[1] * counts[2]
+            if total > MAX_INSTANCES:
+                probs.add(f"{total} instances; a grid can have at most {MAX_INSTANCES}", i, n, "count_x")
         for axis in ("x", "y", "z"):
             count, step = params.get(f"count_{axis}", 1), params.get(f"step_{axis}", 0)
             if isinstance(count, int) and count > 1 and _is_number(step) and step == 0:
@@ -680,7 +691,7 @@ def validate_request(req: Any) -> Dict[str, Any]:
     doc = req.get("doc", "model.FCStd")
     if not isinstance(doc, str) or not doc.lower().endswith(".fcstd"):
         probs.add("'doc' must be a path ending in .FCStd")
-    for flag in ("new", "dry_run"):
+    for flag in ("new", "dry_run", "brief"):
         if flag in req and not isinstance(req[flag], bool):
             probs.add(f"'{flag}' must be true or false")
     steps_raw = req.get("steps")
@@ -705,5 +716,6 @@ def validate_request(req: Any) -> Dict[str, Any]:
         "doc": doc,
         "new": bool(req.get("new", False)),
         "dry_run": bool(req.get("dry_run", False)),
+        "brief": bool(req.get("brief", False)),
         "steps": steps,
     }

@@ -14,6 +14,41 @@ def _overlaps(a: Any, b: Any) -> bool:
     return a.Shape.BoundBox.intersect(b.Shape.BoundBox)
 
 
+BOOLEAN_TYPES = ("Part::Cut", "Part::MultiFuse", "Part::MultiCommon")
+DEEP_CHAIN = 12
+
+
+def _chain_depth(obj: Any) -> int:
+    """How many booleans are stacked under ``obj`` along its deepest input."""
+    depth, level, seen = 0, [obj], set()
+    while level and depth < 200:
+        nxt = []
+        for o in level:
+            for i in o.OutList:
+                if i.TypeId in BOOLEAN_TYPES and i.Name not in seen:
+                    seen.add(i.Name)
+                    nxt.append(i)
+        if not nxt:
+            break
+        depth, level = depth + 1, nxt
+    return depth
+
+
+def _warn_deep_chain(ctx: Context, obj: Any) -> None:
+    """One warning per request: FreeCAD recomputes a boolean much more slowly when it sits on a long chain
+    of earlier booleans (measured on 1.1: 50 holes cut one by one take 21 s, as one cut 1.3 s)."""
+    if any(w["code"] == "DEEP_CHAIN" for w in ctx.warnings):
+        return
+    depth = _chain_depth(obj)
+    if depth >= DEEP_CHAIN:
+        ctx.warn(
+            "DEEP_CHAIN",
+            f"'{obj.Name}' sits on a chain of {depth} booleans; each further one gets slower to compute. "
+            "Combine repeated features in one step: one 'cut' with all the 'tools', an array of the tool, "
+            "or (in a body) one 'hole' with all its centres.",
+        )
+
+
 def cut(ctx: Context, p: Dict[str, Any]) -> Any:
     base = ctx.get(p["base"])
     tool_refs = p["tools"] if "tools" in p else [p["tool"]]
@@ -54,6 +89,7 @@ def cut(ctx: Context, p: Dict[str, Any]) -> Any:
         for t in tools:
             if not _overlaps(base, t):
                 ctx.warn("NO_EFFECT", f"tool '{t.Name}' does not overlap '{base.Name}' and removed nothing")
+    _warn_deep_chain(ctx, obj)
     return obj
 
 
@@ -71,6 +107,7 @@ def fuse(ctx: Context, p: Dict[str, Any]) -> Any:
             f"fusion result has {n} separate solids: some objects do not touch. "
             "Move them to overlap if one connected part is intended.",
         )
+    _warn_deep_chain(ctx, obj)
     return obj
 
 
