@@ -1,7 +1,7 @@
 ---
 name: freecad-skill
 description: "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; mass and stress checks; parts from GitHub."
-version: 3.0.0
+version: 3.0.1
 homepage: https://clawhub.ai/ninja7v/skills/freecad-skill
 metadata: {"openclaw":{"emoji":"📐","homepage":"https://clawhub.ai/ninja7v/skills/freecad-skill","requires":{"anyBins":["python3","python"]},"envVars":[{"name":"FCSKILL_FREECAD","required":false,"description":"Path or command of FreeCAD's command-line executable (freecadcmd) if auto-detection fails, e.g. '/path/FreeCAD.AppImage freecadcmd'."},{"name":"FCSKILL_WORKSPACE","required":false,"description":"Root folder for documents and exports. Default: the current directory. Paths outside it are refused."},{"name":"FCSKILL_LIBRARY","required":false,"description":"Path to a local clone of the FreeCAD parts library; library parts are then copied from it instead of downloaded."},{"name":"FCSKILL_OFFLINE","required":false,"description":"Set to 1 to forbid all network access. Otherwise the only network use is the optional parts library: anonymous GET requests to api.github.com and raw.githubusercontent.com for FreeCAD/FreeCAD-library, made only by the library command and by import steps that name a library part."}]}}
 ---
@@ -95,6 +95,9 @@ When something is wrong, `warnings` appears, e.g.
   Every result is rendered and exported, so delete leftovers before trusting a render.
 - `SELF_INTERSECTION` means a result passes through itself (e.g. a spring whose wire is thicker than its
   pitch). Its volume and mass are wrong and other CAD systems may reject it: fix it, don't deliver it.
+- `SELF_INTERSECTION_UNCHECKED` means that check could not give an answer for a result (the message says
+  why: too many faces, invalid geometry, or the checker failed). The result is then **unconfirmed, not
+  clean**: tell the user, or simplify or repair the part and run again.
 - `DEEP_CHAIN` means many booleans are stacked one on another, which gets slow. See Workflow, step 3.
 - On failure, `error` has `code`, `message`, `hint`, `step`, `op` and often `details` (available names,
   measured values). Exit code is 0 on success, 1 when the request failed, 2 when FreeCAD is missing or crashed.
@@ -295,7 +298,7 @@ edges with their type, centre, normal, direction and radius.
    `deg` and similar are rejected (`L` happens to be allowed). Use descriptive names such as `height`,
    `length`, `thickness` or `wall`; the error suggests one.
 3. **Send one request per coherent change**, with `expect` on the steps that matter (`volume`, `bbox_size`,
-   `bbox_min`, `bbox_max`, `solids`). An expectation that doesn't hold is an error, so mistakes never slip
+   `bbox_min`, `bbox_max`, `solids`, `self_intersecting`). An expectation that doesn't hold is an error, so mistakes never slip
    through as a success.
    - **Batch repeated features.** Don't cut 30 holes with 30 `cut` steps: each boolean stacked on the last
      is slower than the one before (50 chained cuts take about 20 s, the same holes in one step about 1 s).
@@ -376,12 +379,35 @@ Don't resend an unchanged request after an error. Change what the error points a
 - If a request needs something these operations can't do, tell the user it isn't supported. Don't work around
   the skill with your own FreeCAD scripts: they skip validation and checks.
 - Placement (`position`) values are literal numbers; expressions apply to dimensions.
-- The self-intersection check is skipped on results with more than 3000 faces (`self_intersection_check:
-  "skipped"` in the result). Shapes are checked when a request makes or changes them: a request that only
-  reads (`inspect`, `measure`, `export`, `render`) reports `results` without `valid`, and `inspect` of a whole
-  document lists objects without it. `inspect` one object for `valid` and `self_intersecting`.
+- The self-intersection check is skipped on results with more than 3000 faces, and cannot run on invalid
+  geometry. A result it did not clear is never reported as clean: it carries `self_intersection_check: "not
+  checked (reason)"`, the response has a `SELF_INTERSECTION_UNCHECKED` warning, and a STEP/BREP export lists
+  it under `verified.self_intersection_unchecked`. When a part must be confirmed free of self-intersection,
+  put `"expect": {"self_intersecting": false}` on its step: the request then fails unless the check ran and
+  passed. Shapes are checked when a request makes or changes them: a request that only reads (`inspect`,
+  `measure`, `export`, `render`) reports `results` without `valid`, and `inspect` of a whole document lists
+  objects without it. `inspect` one object for `valid` and `self_intersecting`.
 - A STEP import becomes one fixed solid (or compound): part names, colours and assembly structure of the
   file are not kept.
+
+## Scope
+
+What the skill does on the machine, and nothing else:
+
+- **Commands:** it is used through one command, `python3 {baseDir}/scripts/fcskill.py`. The launcher starts
+  FreeCAD's command-line program (found automatically, or the one named by `FCSKILL_FREECAD`) with the
+  environment it was started in; `fem_static` makes FreeCAD run its bundled Gmsh and CalculiX. No shell, no
+  other program, and requests cannot carry code.
+- **Files:** it reads and writes inside the workspace only (documents, exports, renders, and the parts cache
+  `.fcskill/library`), plus temporary files it removes afterwards (in the system temporary folder, or in
+  `~/snap/freecad/common/fcskill` when FreeCAD is a snap). Paths that leave the workspace are refused, and
+  the parts cache is never used through links.
+- **Network:** only the optional parts library, as anonymous downloads of fixed GitHub URLs
+  (`api.github.com` and `raw.githubusercontent.com`, repository FreeCAD/FreeCAD-library), each checked
+  against the library's index. Nothing is uploaded. `FCSKILL_OFFLINE=1` turns it off.
+- **Environment variables:** it reads the four `FCSKILL_*` settings (FreeCAD command, workspace, local
+  library clone, offline switch); on Windows it also reads the standard program-folder variables to find
+  FreeCAD. It uses no credentials and stores none.
 
 ## Compatibility
 

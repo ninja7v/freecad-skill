@@ -617,7 +617,7 @@ Assert geometric expectations on an object; fails with EXPECTATION_FAILED if the
 | Param | Type | Required | Default | Constraints | Description |
 |---|---|---|---|---|---|
 | `target` | name | **yes** |  |  | Object to operate on. |
-| `expect` | expect | **yes** |  |  | Expectations: volume, bbox_size, bbox_min, bbox_max, solids, valid, tolerance (mm, default 0.01), volume_tolerance (relative, default 0.001). |
+| `expect` | expect | **yes** |  |  | Expectations: volume, bbox_size, bbox_min, bbox_max, solids, valid, self_intersecting (false holds only when the check ran and passed), tolerance (mm, default 0.01), volume_tolerance (relative, default 0.001). |
 
 ### `measure`
 

@@ -123,13 +123,9 @@ def _safe_ccx_class() -> Any:
         def start_ccx(self) -> int:
             self.ccx_stdout = ""
             self.ccx_stderr = ""
-            env = dict(
-                os.environ,
-                OMP_NUM_THREADS="1",
-                CCX_NPROC_EQUATION_SOLVER="1",
-                CCX_NPROC_STIFFNESS="1",
-                CCX_NPROC_RESULTS="1",
-            )
+            # Single-threaded, set by name on this (one-request) FreeCAD process, which the solver inherits.
+            for name in ("OMP_NUM_THREADS", "CCX_NPROC_EQUATION_SOLVER", "CCX_NPROC_STIFFNESS", "CCX_NPROC_RESULTS"):
+                os.environ[name] = "1"
             folder, base = os.path.split(self.inp_file_name)
             base = os.path.splitext(base)[0]
             p = subprocess.Popen(
@@ -137,7 +133,6 @@ def _safe_ccx_class() -> Any:
                 cwd=folder or None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=env,
             )
             try:
                 out, err = p.communicate(timeout=SOLVE_TIMEOUT)

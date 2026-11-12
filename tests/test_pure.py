@@ -490,68 +490,103 @@ class LibraryTests(unittest.TestCase):
         req = {"steps": [{"op": "import", "library": "A/B"}, {"op": "box"}, {"op": "import", "file": "x.step"}]}
         self.assertEqual(library.library_refs(req), ["A/B"])
 
+    def _clone(self, clone):
+        part = Path(clone) / "Mechanical Parts" / "Nut_M3.step"
+        part.parent.mkdir(parents=True)
+        part.write_text("ISO-10303-21;")
+        return library.source(clone, False)
+
     def test_local_clone_and_offline(self):
         with tempfile.TemporaryDirectory() as clone, tempfile.TemporaryDirectory() as ws:
-            part = Path(clone) / "Mechanical Parts" / "Nut_M3.step"
-            part.parent.mkdir(parents=True)
-            part.write_text("ISO-10303-21;")
+            src = self._clone(clone)
             (Path(clone) / "readme.md").write_text("x")
-            old = {k: os.environ.get(k) for k in (library.ENV_LOCAL, library.ENV_OFFLINE)}
-            try:
-                os.environ[library.ENV_LOCAL] = clone
-                index = library.load_index(Path(ws))
-                self.assertEqual(list(index["files"]), ["Mechanical Parts/Nut_M3.step"])
-                dest, meta = library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index)
-                self.assertEqual(dest.read_text(), "ISO-10303-21;")
-                self.assertTrue(str(dest).startswith(ws))
-                self.assertTrue(dest.with_name(dest.name + ".json").is_file())
-                del os.environ[library.ENV_LOCAL]
-                os.environ[library.ENV_OFFLINE] = "1"
-                with self.assertRaises(errors.SkillError) as cm:
-                    library.load_index(Path(ws) / "empty")
-                self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
-            finally:
-                for k, v in old.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
+            index = library.load_index(Path(ws), src=src)
+            self.assertEqual(list(index["files"]), ["Mechanical Parts/Nut_M3.step"])
+            dest, meta = library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index, src)
+            self.assertEqual(dest.read_text(), "ISO-10303-21;")
+            self.assertTrue(str(dest).startswith(ws))
+            self.assertTrue(dest.with_name(dest.name + ".json").is_file())
+            self.assertEqual([p.name for p in dest.parent.iterdir() if p.name.endswith(".part")], [])
+            with self.assertRaises(errors.SkillError) as cm:
+                library.load_index(Path(ws) / "empty", src=library.source(None, True))
+            self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
+            with self.assertRaises(errors.SkillError) as cm:
+                library.source(str(Path(clone) / "missing"), False)
+            self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
 
+    def test_module_reads_no_environment(self):
+        # The launcher passes the settings in; the module that talks to the network sees no environment.
+        code = (Path(library.__file__)).read_text(encoding="utf-8")
+        self.assertFalse("os.environ" in code or "getenv" in code)
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
     def test_planted_links_cannot_redirect_cache_writes(self):
         with (
             tempfile.TemporaryDirectory() as clone,
             tempfile.TemporaryDirectory() as ws,
             tempfile.TemporaryDirectory() as out,
         ):
-            part = Path(clone) / "Mechanical Parts" / "Nut_M3.step"
-            part.parent.mkdir(parents=True)
-            part.write_text("ISO-10303-21;")
+            src = self._clone(clone)
             victim = Path(out) / "victim.txt"
             victim.write_text("keep")
-            old = os.environ.get(library.ENV_LOCAL)
-            try:
-                os.environ[library.ENV_LOCAL] = clone
-                index = library.load_index(Path(ws))
-                dest = library.local_path(Path(ws), "Mechanical Parts/Nut_M3.step")
-                dest.parent.mkdir(parents=True)
-                dest.symlink_to(victim)  # a link to a file outside: replaced by the part, victim untouched
-                library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index)
-                self.assertFalse(dest.is_symlink())
-                self.assertEqual(dest.read_text(), "ISO-10303-21;")
-                self.assertEqual(victim.read_text(), "keep")
-                for p in dest.parent.iterdir():
-                    p.unlink()
-                dest.parent.rmdir()
-                dest.parent.symlink_to(out, target_is_directory=True)  # a linked folder: refused
+            index = library.load_index(Path(ws), src=src)
+            dest = library.local_path(Path(ws), "Mechanical Parts/Nut_M3.step")
+            dest.parent.mkdir(parents=True)
+            dest.symlink_to(victim)  # a link to a file outside: replaced by the part, victim untouched
+            library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index, src)
+            self.assertFalse(dest.is_symlink())
+            self.assertEqual(dest.read_text(), "ISO-10303-21;")
+            self.assertEqual(victim.read_text(), "keep")
+            for p in dest.parent.iterdir():
+                p.unlink()
+            dest.parent.rmdir()
+            dest.parent.symlink_to(out, target_is_directory=True)  # a linked folder: refused
+            with self.assertRaises(errors.SkillError) as cm:
+                library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index, src)
+            self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
+            self.assertEqual(sorted(p.name for p in Path(out).iterdir()), ["victim.txt"])
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_linked_cache_root_is_refused_at_every_level(self):
+        # A link at .fcskill, .fcskill/library or .fcskill/library/parts would make "the cache" itself an
+        # outside folder: nothing is written or read through it, and nothing is created behind it.
+        levels = [Path(".fcskill"), Path(".fcskill") / "library", Path(".fcskill") / "library" / "parts"]
+        for level in levels:
+            with (
+                self.subTest(level=str(level)),
+                tempfile.TemporaryDirectory() as clone,
+                tempfile.TemporaryDirectory() as ws,
+                tempfile.TemporaryDirectory() as out,
+            ):
+                src = self._clone(clone)
+                index = library.load_index(Path(ws), src=src)
+                link = Path(ws) / level
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(out, target_is_directory=True)
                 with self.assertRaises(errors.SkillError) as cm:
-                    library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index)
+                    library.fetch(Path(ws), "Mechanical Parts/Nut_M3", index, src)
                 self.assertEqual(cm.exception.code, errors.LIBRARY_UNAVAILABLE)
-                self.assertEqual(sorted(p.name for p in Path(out).iterdir()), ["victim.txt"])
-            finally:
-                if old is None:
-                    os.environ.pop(library.ENV_LOCAL, None)
-                else:
-                    os.environ[library.ENV_LOCAL] = old
+                self.assertEqual(list(Path(out).iterdir()), [])
+                with self.assertRaises(errors.SkillError):
+                    library._write_cached(Path(ws), Path(ws) / library.CACHE_DIR / "parts" / "x.step", b"x")
+                self.assertEqual(list(Path(out).iterdir()), [])
+                with self.assertRaises(errors.SkillError):
+                    library.parts_folder(Path(ws))
+
+    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
+    def test_cache_reads_do_not_follow_links(self):
+        with tempfile.TemporaryDirectory() as ws, tempfile.TemporaryDirectory() as out:
+            planted = Path(out) / "index.json"
+            planted.write_text('{"source": "planted", "files": {}}')
+            cache = Path(ws) / library.CACHE_DIR
+            cache.mkdir(parents=True)
+            (cache / "index.json").symlink_to(planted)
+            self.assertIsNone(library._read_cached(Path(ws), cache / "index.json"))
+            with self.assertRaises(errors.SkillError):  # treated as missing: offline, so no index
+                library.load_index(Path(ws), src=library.source(None, True))
+            with self.assertRaises(errors.SkillError):  # only cache paths are accepted
+                library._write_cached(Path(ws), Path(ws) / "model.FCStd", b"x")
+            self.assertIsNone(library.parts_folder(Path(ws)))
 
     def test_blob_hash_matches_git(self):
         self.assertEqual(library._blob_sha(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")  # git hash-object

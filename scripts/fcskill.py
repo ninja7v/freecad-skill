@@ -257,14 +257,21 @@ def _doc_rel(request: Any) -> str:
     return "model.FCStd"
 
 
-def _run_tree(cmd: List[str], env: Dict[str, str], cwd: Path, timeout: float) -> "subprocess.CompletedProcess[bytes]":
-    """Run FreeCAD; on timeout kill it together with its children (Gmsh, CalculiX), not just FreeCAD."""
+def _links_in(folder: str, names: List[str]) -> List[str]:
+    """copytree filter: links are left out, so staging copies nothing from outside the folder."""
+    return [n for n in names if os.path.islink(os.path.join(folder, n))]
+
+
+def _run_tree(cmd: List[str], cwd: Path, timeout: float) -> "subprocess.CompletedProcess[bytes]":
+    """Run FreeCAD; on timeout kill it together with its children (Gmsh, CalculiX), not just FreeCAD.
+
+    FreeCAD starts with this process's environment, unchanged: the launcher neither copies nor edits it."""
     posix = os.name == "posix"
     kw: Dict[str, Any] = (
         {"start_new_session": True} if posix else {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
     )
     proc = subprocess.Popen(
-        cmd, env=env, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw
+        cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw
     )
     try:
         out, _ = proc.communicate(timeout=timeout)
@@ -316,9 +323,10 @@ def run_subprocess(backend: Backend, request: Any, root: Path, timeout: float) -
                     target = staged_ws / workspace.relative(root, src)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, target)
-            parts = root / library.CACHE_DIR / "parts"
-            if library.library_refs(request) and parts.is_dir():  # downloaded library parts the request imports
-                shutil.copytree(parts, staged_ws / library.CACHE_DIR / "parts")
+            # Downloaded library parts the request imports: real files only, from a cache not reached via links.
+            parts = library.parts_folder(root) if library.library_refs(request) else None
+            if parts is not None:
+                shutil.copytree(parts, staged_ws / library.CACHE_DIR / "parts", ignore=_links_in)
             run_root = staged_ws
 
         req_file, resp_file = io_dir / "request.json", io_dir / "response.json"
@@ -327,9 +335,8 @@ def run_subprocess(backend: Backend, request: Any, root: Path, timeout: float) -
             f"import sys; sys.path.insert(0, {str(engine_parent)!r}); from fcengine.runner import main_from_files; "
             f"main_from_files({str(req_file)!r}, {str(resp_file)!r}, {str(run_root)!r})"
         )
-        env = dict(os.environ)
         try:
-            proc = _run_tree(backend.cmd + ["-c", boot], env, run_root, timeout)
+            proc = _run_tree(backend.cmd + ["-c", boot], run_root, timeout)
         except subprocess.TimeoutExpired:
             return env_error(
                 errors.TIMEOUT,
@@ -424,9 +431,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     refs = library.library_refs(request)
     if refs:  # downloaded here: FreeCAD's own Python may lack SSL, and the engine stays offline
         try:
-            index = library.load_index(root)
+            src = _library_source()
+            index = library.load_index(root, src=src)
             for ref in refs:
-                library.fetch(root, ref, index)
+                library.fetch(root, ref, index, src)
         except errors.SkillError as e:
             return emit(errors.error_response(e, engine=__version__), args.pretty)
     resp = execute(request, root, args.freecad or os.environ.get("FCSKILL_FREECAD"), args.timeout)
@@ -434,10 +442,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     return emit(resp, args.pretty)
 
 
+def _library_source() -> "library.Source":
+    """The parts library settings: a local clone (FCSKILL_LIBRARY) and the offline switch (FCSKILL_OFFLINE)."""
+    return library.source(os.environ.get(library.ENV_LOCAL), os.environ.get(library.ENV_OFFLINE) == "1")
+
+
 def cmd_library(args: argparse.Namespace) -> int:
     root = Path(args.workspace or os.environ.get("FCSKILL_WORKSPACE") or os.getcwd()).resolve()
     try:
-        index = library.load_index(root, refresh=args.refresh)
+        index = library.load_index(root, refresh=args.refresh, src=_library_source())
         if not args.query:
             return emit(
                 {

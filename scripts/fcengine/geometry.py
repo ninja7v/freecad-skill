@@ -65,36 +65,81 @@ def is_valid(shape: Any) -> bool:
 # through itself, e.g. a spring whose wire is thicker than its pitch: such a solid has a wrong volume and
 # breaks later booleans. The check is slower than isValid, so it is skipped above this face count.
 SELF_CHECK_MAX_FACES = 3000
-_SELF: Dict[int, Tuple[Any, Optional[bool]]] = {}
+_SELF: Dict[int, Tuple[Any, Optional[bool], Optional[str]]] = {}
 
 
-def self_intersects(shape: Any) -> Optional[bool]:
-    """True/False, or None when the check was skipped (too many faces) or could not run.
+# FreeCAD reports the checker's findings as one exception text, one "BOPAlgo <kind>" per finding. These kinds
+# come from the checker's other, independent tests (continuity, edge size, curve-on-surface fit): a report
+# holding only these means the self-intersection test ran and found nothing. Any other text does not.
+_BOP_REPORT = "BOP check found the following errors:"
+_UNRELATED_FINDINGS = ("GeomAbs_C0", "TooSmallEdge", "InvalidCurveOnSurface")
+
+
+def self_check(shape: Any) -> Tuple[Optional[bool], Optional[str]]:
+    """(verdict, reason). The verdict is True (a solid passes through itself), False (every solid was
+    checked and none does) or None: not established. ``reason`` then says why.
+
+    A clean result is reported only when it was obtained: a solid the checker could not examine (FreeCAD
+    runs the self-intersection test only on geometry that passes its validity test), an aborted run or an
+    unrecognised checker error all leave the verdict open, for the whole shape.
 
     Solids are checked one by one: separate solids of a compound may overlap on purpose (parts of an
     assembly, unfused array instances), which is reported elsewhere."""
     if shape is None or shape.isNull():
-        return None
+        return None, "empty shape"
     key = shape.hashCode()
     hit = _SELF.get(key)
     if hit is not None and hit[0].isSame(shape):
-        return hit[1]
-    result: Optional[bool]
-    if len(shape.Faces) > SELF_CHECK_MAX_FACES:
-        result = None
-    else:
-        result = False
-        for solid in shape.Solids:
-            try:
-                solid.check(True)
-            except Exception as e:
-                if "SelfIntersect" in str(e):
-                    result = True
-                    break
+        return hit[1], hit[2]
+    verdict, reason = _self_check(shape)
     while len(_SELF) >= VALID_CACHE:
         _SELF.pop(next(iter(_SELF)))
-    _SELF[key] = (shape, result)
-    return result
+    _SELF[key] = (shape, verdict, reason)
+    return verdict, reason
+
+
+def _self_check(shape: Any) -> Tuple[Optional[bool], Optional[str]]:
+    solids = shape.Solids
+    if not solids:
+        return None, "no solid to check"
+    if len(shape.Faces) > SELF_CHECK_MAX_FACES:
+        return None, f"skipped: more than {SELF_CHECK_MAX_FACES} faces"
+    open_reason: Optional[str] = None
+    for solid in solids:
+        try:
+            solid.check(True)
+            continue  # checked: clean
+        except Exception as e:
+            text = str(e)
+        if "SelfIntersect" in text:
+            return True, None  # confirmed, whatever happened on the other solids
+        if _only_unrelated_findings(text):
+            continue  # the test ran; the checker's other tests found something else
+        if open_reason is None:
+            open_reason = _open_reason(solid, text)
+    return (None, open_reason) if open_reason else (False, None)
+
+
+def _only_unrelated_findings(text: str) -> bool:
+    head, sep, body = text.partition(_BOP_REPORT)
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    if not sep or head.strip() or not lines:
+        return False
+    return all(ln.rpartition("BOPAlgo")[2].strip(" _") in _UNRELATED_FINDINGS for ln in lines)
+
+
+def _open_reason(solid: Any, text: str) -> str:
+    try:
+        if not solid.isValid():
+            return "the geometry is invalid, so the check cannot run"
+    except Exception:
+        pass
+    return "the check did not complete: " + (" ".join(text.split())[:200] or "no details")
+
+
+def self_intersects(shape: Any) -> Optional[bool]:
+    """The verdict of self_check: True, False, or None when it is not established."""
+    return self_check(shape)[0]
 
 
 def summary(shape: Any, detailed: bool = False, validity: bool = True) -> Dict[str, Any]:
@@ -324,6 +369,16 @@ def check_expectations(shape: Any, exp: Dict[str, Any]) -> List[Dict[str, Any]]:
         failures.append({"check": "solids", "expected": exp["solids"], "actual": len(shape.Solids)})
     if "valid" in exp and is_valid(shape) != exp["valid"]:
         failures.append({"check": "valid", "expected": exp["valid"], "actual": is_valid(shape)})
+    if "self_intersecting" in exp:
+        verdict, reason = self_check(shape)
+        if verdict is not exp["self_intersecting"]:  # an unestablished verdict never satisfies the expectation
+            failures.append(
+                {
+                    "check": "self_intersecting",
+                    "expected": exp["self_intersecting"],
+                    "actual": verdict if verdict is not None else f"not checked ({reason})",
+                }
+            )
     return failures
 
 

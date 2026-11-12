@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.0.1
+
+Fixes for the two weaknesses the ClawHub security audit of 3.0.0 confirmed, and a clearer scope.
+
+### Fixed
+- **The self-intersection check could report a clean result it had not obtained.** FreeCAD runs that test
+  only on geometry that passes its validity test, and the skill read every checker error that did not name a
+  self-intersection as "none found", then cached it. The check now has three faithful outcomes: found, not
+  found (only when every solid was examined), and not established, with the reason. A result that was not
+  cleared carries `self_intersection_check: "not checked (reason)"` and a `SELF_INTERSECTION_UNCHECKED`
+  warning, STEP/BREP exports list it under `verified.self_intersection_unchecked`, and `inspect` shows the
+  reason. Results with more than 3000 faces, which skip the check, are reported the same way (they had
+  no warning before).
+- **A link planted in the workspace could redirect the parts cache.** The cache writer compared resolved
+  paths, so a link at `.fcskill` or `.fcskill/library` itself passed the check, and folders were created
+  before it. Cache files are now reached from the workspace folder one component at a time without
+  following links (descriptor-relative on Linux and macOS, a per-component check on Windows), for reads as
+  well as writes; a link anywhere on the way is refused with `LIBRARY_UNAVAILABLE`. Staging for snap FreeCAD
+  copies real files only.
+
+### Added
+- `expect: {"self_intersecting": false}` on a step or in `check` fails the request unless the check ran and
+  passed, for work that needs the confirmation.
+
+### Changed
+- The launcher starts FreeCAD with its own environment instead of a copy of it, and the solver's
+  single-thread settings are set by name: same behaviour, no copy of the environment anywhere.
+- The parts library code reads no environment variable: the launcher passes the `FCSKILL_LIBRARY` and
+  `FCSKILL_OFFLINE` settings in, so a download is built from constants and a library path only.
+- SKILL.md has a "Scope" section listing the commands, files, network use and environment variables.
+
 ## 3.0.0
 
 A reliability and engineering release.

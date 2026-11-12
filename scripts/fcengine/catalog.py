@@ -892,7 +892,7 @@ OPS: List[Op] = [
             Param(
                 "expect",
                 "expect",
-                "Expectations: volume, bbox_size, bbox_min, bbox_max, solids, valid, tolerance (mm, default 0.01), volume_tolerance (relative, default 0.001).",
+                "Expectations: volume, bbox_size, bbox_min, bbox_max, solids, valid, self_intersecting (false holds only when the check ran and passed), tolerance (mm, default 0.01), volume_tolerance (relative, default 0.001).",
                 required=True,
             ),
         ),
@@ -1199,7 +1199,17 @@ STEP_KEYS = ("op", "expect", "comment")
 # Request envelope keys.
 REQUEST_KEYS = ("doc", "new", "steps", "dry_run", "brief")
 
-EXPECT_KEYS = ("volume", "bbox_size", "bbox_min", "bbox_max", "solids", "valid", "tolerance", "volume_tolerance")
+EXPECT_KEYS = (
+    "volume",
+    "bbox_size",
+    "bbox_min",
+    "bbox_max",
+    "solids",
+    "valid",
+    "self_intersecting",
+    "tolerance",
+    "volume_tolerance",
+)
 
 CATEGORIES = (
     "solid",
