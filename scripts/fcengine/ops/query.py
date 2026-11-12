@@ -96,7 +96,10 @@ def _params(doc: Any) -> Dict[str, Any]:
 def inspect(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
     doc = ctx.doc
     if not p.get("target"):
-        objs = [object_entry(o) for o in visible_objects(doc) if not o.TypeId.startswith("Spreadsheet::")]
+        # No validity here: checking every object of a large tree takes seconds; inspect one object for it.
+        objs = [
+            object_entry(o, validity=False) for o in visible_objects(doc) if not o.TypeId.startswith("Spreadsheet::")
+        ]
         data: Dict[str, Any] = {"objects": objs}
         params = _params(doc)
         if params:
@@ -122,6 +125,18 @@ def inspect(ctx: Context, p: Dict[str, Any]) -> Dict[str, Any]:
         import json
 
         entry["selector"] = json.loads(getattr(obj, SEL_PROP))
+    if obj.TypeId == "Assembly::AssemblyObject":
+        from .assembly import bom
+
+        entry["bom"] = bom(obj)
+    if obj.TypeId == "Sketcher::SketchObject":
+        try:
+            entry["sketch"] = {"degrees_of_freedom": int(obj.DoF), "fully_constrained": bool(obj.FullyConstrained)}
+        except Exception:
+            pass
+    if geometry.is_part_shape(obj) and not obj.Shape.isNull() and obj.Shape.Solids:
+        verdict = geometry.self_intersects(obj.Shape)
+        entry["self_intersecting"] = verdict if verdict is not None else "not checked (too many faces)"
     if p.get("topology") and geometry.is_part_shape(obj) and not obj.Shape.isNull():
         faces = geometry.describe_faces(obj.Shape)
         edges = geometry.describe_edges(obj.Shape)

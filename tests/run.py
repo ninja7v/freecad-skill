@@ -42,7 +42,7 @@ def run_engine(verbosity: int) -> bool:
     if backend is None:
         print("FreeCAD not found: engine tests skipped (set FCSKILL_FREECAD).", file=sys.stderr)
         return False
-    if backend.kind == "inprocess":
+    if backend.kind == "python":
         suite = unittest.defaultTestLoader.loadTestsFromName("test_engine")
         return unittest.TextTestRunner(verbosity=verbosity).run(suite).wasSuccessful()
     out = TESTS / ".engine-result"

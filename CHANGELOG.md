@@ -1,5 +1,73 @@
 # Changelog
 
+## 3.0.0
+
+A reliability and engineering release.
+
+### Added
+- **Parametric profiles.** The numbers of `rect`, `circle` and `slot` shapes (coordinates, `radius`,
+  `corner_radius`) can be expressions such as `"=Params.width"`, in `extrude` and `revolve`, in and out of a
+  body. These shapes are now fully dimensioned sketches (one named dimension per number, zero degrees of
+  freedom), so they are also stable when edited in the FreeCAD GUI. `inspect` of a sketch reports
+  `degrees_of_freedom`. Until now only heights, offsets and primitive sizes could follow parameters.
+- **Mass properties.** `measure` reports volume, area, centre of mass and the inertia tensor per object
+  (`properties`), in g*mm2 with principal moments when a density is known, and the `total` mass and centre of
+  mass of several parts. `inspect` of an object includes the geometric inertia.
+- **STEP files with names and structure.** Parts are written as named products, and an assembly as a product
+  structure in which each part is defined once and placed as often as it is used. `verified.part_names`
+  confirms it. Before, every STEP held anonymous shapes and assemblies were flattened.
+- **Self-intersection check.** Results a request creates or changes are checked for passing through
+  themselves, which FreeCAD's validity check does not see (e.g. a spring with a wire thicker than its pitch
+  was reported valid, with a wrong volume). Reported as a `SELF_INTERSECTION` warning, in the result and in
+  the export record; mesh exports report `self_intersections`.
+- **Drawings:** equal holes get one diameter with a count (`4x ⌀5.5`), and a hole table on the sheet and in
+  the result (`holes`) gives each vertical hole's position.
+- **Bill of materials** for assemblies (`bom`: part, quantity, material, mass each), from `assembly` and
+  `inspect`.
+- `fem_static` uses the material assigned to the part when `material` is left out.
+- New material grades with strength data: `steel_s235`, `steel_s355`, `stainless_304`, `aluminium_5754`,
+  `nylon_pa12`, usable in `material`, `measure` and `fem_static` alike.
+- `brief: true` on a request leaves the per-step geometry out of long responses.
+- `DEEP_CHAIN` warning when booleans are stacked 12 deep, with advice to batch.
+
+### Changed (breaking)
+- `export`: the `format` parameter is removed. It could never differ from the file extension.
+- `fem_static`: `material` must be a specific grade; generic `steel` and `aluminium` are refused because their
+  yield strength depends on the grade. `aluminium_6061_t6` and `titanium_gr5` remain valid names.
+- `assembly`: a part without `position` or `rotation` keeps the placement it was modelled with. It used to move
+  to the origin, often into another part, without a warning.
+- `inspect` without a target no longer reports `valid` for every object, and the `results` of a request
+  that changes nothing carry no `valid` field. `inspect` one object to check it.
+- One material table (`matdata.py`) replaces the separate tables of `material` and `fem_static`. Densities now
+  come from it (e.g. `steel` 7.85 g/cm3 instead of the FreeCAD library's 7.9; `abs` 1.04).
+
+### Fixed
+- **Speed of read-only requests.** Listing a document checked the validity of every object: 7.9 s for a plate
+  built from 50 chained cuts, 84 s with 100. It now takes 1.1 s and 6.2 s (4 s of the latter is FreeCAD opening
+  the file). Requests that only read (`inspect`, `measure`, `export`, `render`) no longer re-check shapes that
+  were checked when they were made, so their `results` carry no `valid` field. Building such a plate one cut
+  at a time stays slow in FreeCAD itself (21 s for 50 holes); SKILL.md now tells agents to batch, which takes
+  1.3 s for the same part.
+- **Imported files and fonts were not found when FreeCAD is a snap and the workspace is a hidden folder or
+  outside the home directory** (the usual place of agent workspaces). The launcher now stages every file a
+  request reads, not only the document.
+- When Python could import FreeCAD directly (conda), requests ran inside the launcher with no timeout and no
+  protection from a crash. Every backend now runs as a separate process.
+- `set` with `open_faces` given as indices on a shell made with a selector was silently ignored.
+- A fillet whose edges disappeared after an upstream change was explained as "radius too large". The hint now
+  says the edge references are gone and how to set them again.
+- STEP export of one moved part through the new writer keeps its position (checked by the read-back).
+- `set` can no longer overwrite the skill's own bookkeeping properties (`FCSkill...`).
+- Arrays are limited to 1000 instances per direction and 5000 per grid.
+- The documented default mesh size of `fem_static` ("half the thinnest dimension") was wrong; it is about the
+  wall thickness. The documentation is corrected, the behaviour is unchanged.
+- ARCHITECTURE.md listed limitations that no longer applied (splines, materials).
+
+### Documentation
+- SKILL.md is shorter (491 to about 400 lines) although it gained the new features. Guidance for `loft`/`sweep`/`text`, imports and library parts, assemblies and
+  stress analysis moved to `docs/SHAPES.md`, `docs/PARTS.md`, `docs/ASSEMBLIES.md` and `docs/ANALYSIS.md`,
+  which the agent reads when it needs them.
+
 ## 2.0.3
 
 ### Fixed

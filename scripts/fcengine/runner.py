@@ -36,7 +36,7 @@ def _step_entry(step: Dict[str, Any], outcome: Any, warnings: List[str]) -> Dict
     if obj is not None and hasattr(obj, "Name"):
         entry["object"] = obj.Name
         if geometry.is_part_shape(obj) and step["op"] not in ("inspect", "check"):
-            s = geometry.summary(obj.Shape)
+            s = geometry.summary(obj.Shape, validity=False)
             entry.update({k: s[k] for k in ("volume", "bbox", "solids") if k in s})
     if data is not None:
         # export details are reported once, in the top-level "exports"
@@ -81,7 +81,11 @@ def _run(req: Dict[str, Any], root: Path, base: Dict[str, Any]) -> Dict[str, Any
     doc = document.open_document(doc_path, req["new"])
     ctx = document.Context(doc, root, doc_path)
     ctx.gui_before = gui_before
-    shapes_before = audit.fingerprints(doc)
+    # A request that only reads (inspect, measure, export...) changes no shape: it needs neither the
+    # fingerprints nor a second validity check of results that were checked when they were made.
+    ctx.read_only = not req["new"] and not any(catalog.OPS_BY_NAME[st["op"]].mutates for st in req["steps"])
+    shapes_before = {} if ctx.read_only else audit.fingerprints(doc)
+    ctx.shapes_before = shapes_before
     if req["new"]:
         ctx.mutated = True  # an explicit reset is saved even without other changes
 
@@ -206,7 +210,11 @@ def _finish(ctx: Any, req: Dict[str, Any], done: List[Dict[str, Any]], base: Dic
 
     doc = ctx.doc
     objs = document.visible_objects(doc)
-    results = [document.object_entry(o) for o in objs if document.role(o) == "result"]
+    result_objs = [o for o in objs if document.role(o) == "result"]
+    read_only = bool(getattr(ctx, "read_only", False)) and not ctx.mutated
+    results = [document.object_entry(o, validity=not read_only) for o in result_objs]
+    if not read_only:
+        _quality_gate(ctx, result_objs, results)
     intermediates = [o.Name for o in objs if document.role(o) == "intermediate"]
 
     # Final integrity pass over results.
@@ -234,6 +242,8 @@ def _finish(ctx: Any, req: Dict[str, Any], done: List[Dict[str, Any]], base: Dic
     else:
         exports = [dict(pe["record"], dry_run=True) for pe in ctx.pending_exports]
 
+    if req.get("brief"):  # long requests: keep what needs attention, drop the per-step geometry
+        done = [{k: v for k, v in d.items() if k not in ("volume", "bbox", "solids")} for d in done]
     resp: Dict[str, Any] = {"status": "success", **base, "saved": saved, "steps": done, "results": results}
     if intermediates:
         resp["intermediates"] = intermediates
@@ -246,6 +256,39 @@ def _finish(ctx: Any, req: Dict[str, Any], done: List[Dict[str, Any]], base: Dic
     if req["dry_run"]:
         resp["note"] = "dry_run: nothing was saved or exported"
     return resp
+
+
+def _quality_gate(ctx: Any, objs: List[Any], entries: List[Dict[str, Any]]) -> None:
+    """Checks that isValid() does not cover, on the results this request created or changed.
+
+    A solid that passes through itself (a sweep thicker than its path's bends, a coil thicker than its
+    pitch) is "valid" for OCC, but its volume is wrong and later booleans break on it."""
+    from . import geometry
+
+    before = getattr(ctx, "shapes_before", {})
+    for obj, entry in zip(objs, entries):
+        if not geometry.is_part_shape(obj) or obj.Shape.isNull() or not obj.Shape.Solids:
+            continue
+        if obj.Name in before and audit._same(before[obj.Name], audit._fingerprint(obj)):
+            continue  # unchanged by this request: it was checked when it was made
+        verdict = geometry.self_intersects(obj.Shape)
+        if verdict and any(w["code"] == "SELF_INTERSECTION" and f"'{obj.Name}'" in w["message"] for w in ctx.warnings):
+            entry["self_intersecting"] = True
+            continue  # already reported by the export that wrote it
+        if verdict is None:
+            entry["self_intersection_check"] = "skipped"
+        elif verdict:
+            entry["self_intersecting"] = True
+            ctx.warnings.append(
+                {
+                    "step": None,
+                    "code": "SELF_INTERSECTION",
+                    "message": f"'{obj.Name}' passes through itself: its volume and mass are wrong, and booleans, "
+                    "meshing and other CAD systems may fail on it. Typical causes: a sweep profile wider than the "
+                    "path's bend radius or a helix pitch, or a shell thicker than a concave radius. Reduce the "
+                    "profile, enlarge the bend radius or pitch, then check again.",
+                }
+            )
 
 
 # ------------------------------------------------------------------ subprocess entry

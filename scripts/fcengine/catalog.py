@@ -710,7 +710,9 @@ OPS: List[Op] = [
         "Repeat an object 'count' times, each copy offset by 'step' (parametric Draft array).",
         (
             TARGET,
-            Param("count", "integer", "Total number of instances, including the original.", required=True, ge=2),
+            Param(
+                "count", "integer", "Total number of instances, including the original.", required=True, ge=2, le=1000
+            ),
             Param("step", "vector", "Offset between consecutive instances.", required=True),
             Param("fuse", "bool", "Fuse touching instances into one solid.", default=True),
             _name("LinearArray"),
@@ -724,11 +726,11 @@ OPS: List[Op] = [
         "Rectangular grid of an object along X and Y (optionally Z) (parametric Draft array).",
         (
             TARGET,
-            Param("count_x", "integer", "Instances along X.", required=True, ge=1),
-            Param("count_y", "integer", "Instances along Y.", required=True, ge=1),
+            Param("count_x", "integer", "Instances along X.", required=True, ge=1, le=1000),
+            Param("count_y", "integer", "Instances along Y.", required=True, ge=1, le=1000),
             Param("step_x", "number", "Spacing along X.", required=True),
             Param("step_y", "number", "Spacing along Y.", required=True),
-            Param("count_z", "integer", "Instances along Z.", default=1, ge=1),
+            Param("count_z", "integer", "Instances along Z.", default=1, ge=1, le=1000),
             Param("step_z", "number", "Spacing along Z.", default=0),
             Param("fuse", "bool", "Fuse touching instances into one solid.", default=True),
             _name("GridArray"),
@@ -742,7 +744,9 @@ OPS: List[Op] = [
         "Repeat an object around an axis (parametric Draft polar array).",
         (
             TARGET,
-            Param("count", "integer", "Total number of instances, including the original.", required=True, ge=2),
+            Param(
+                "count", "integer", "Total number of instances, including the original.", required=True, ge=2, le=1000
+            ),
             Param(
                 "angle",
                 "number",
@@ -961,10 +965,11 @@ OPS: List[Op] = [
             Param(
                 "material",
                 "string",
-                "Preset: steel, stainless_steel, cast_iron, aluminium, aluminium_6061, aluminium_7075, "
-                "titanium, copper, brass, bronze, gold, silver, chrome, pla, abs, petg, nylon, pom, polypropylene, "
-                "polycarbonate, acrylic, ptfe, pvc, rubber, glass, wood, concrete, default; or any FreeCAD library material "
-                "name (e.g. 'Steel-C45E').",
+                "Preset: steel, steel_s235, steel_s355, stainless_steel, stainless_304, cast_iron, aluminium, "
+                "aluminium_6061, aluminium_7075, aluminium_5754, titanium, copper, brass, bronze, gold, silver, chrome, "
+                "pla, abs, petg, nylon, nylon_pa12, pom, polypropylene, polycarbonate, acrylic, ptfe, pvc, rubber, "
+                "glass, wood, concrete, default; or any FreeCAD library material name (e.g. 'Steel-C45E'). Grades "
+                "(steel_s235, aluminium_6061, ...) also carry the strength data 'fem_static' uses.",
             ),
             Param(
                 "color",
@@ -980,8 +985,9 @@ OPS: List[Op] = [
     Op(
         "measure",
         "query",
-        "Clearance and interference between objects (minimum distance, closest points, overlap volume) and, with a "
-        "material, their mass. Use it to check that parts fit together.",
+        "Clearance and interference between objects (minimum distance, closest points, overlap volume), and each "
+        "object's mass properties: volume, area, centre of mass and inertia tensor, plus mass with a material. "
+        "Use it to check that parts fit together and what they weigh.",
         (
             Param(
                 "objects",
@@ -1003,26 +1009,26 @@ OPS: List[Op] = [
             Param("density", "number", "Explicit density in g/cm3 (instead of 'material').", gt=0),
         ),
         mutates=False,
-        notes="Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0).",
+        notes="Status per pair: 'clear' (distance > 0), 'touching' (distance 0, no overlap) or 'interfering' (overlap volume > 0). "
+        "'properties' gives, per object, the inertia tensor about its centre of mass along the global axes: in "
+        "g*mm2 ('inertia_g_mm2', with its principal moments) when a density is known, otherwise geometric "
+        "('inertia_mm5': multiply by the density in g/mm3). With masses for every object, 'total' gives the "
+        "combined mass and centre of mass.",
         example={"op": "measure", "objects": ["Lid", "Box"], "require": {"min_clearance": 0.3}},
     ),
     Op(
         "export",
         "output",
         "Export objects to STEP, IGES, BREP, STL, OBJ or 3MF, or as a flat 2D outline (DXF, SVG) for laser/CNC cutting, "
-        "and verify the written file by reading it back.",
+        "and verify the written file by reading it back. STEP files carry each part's name, and an assembly "
+        "as a product structure (every part once, placed as often as it is used).",
         (
             Param(
                 "filename",
                 "path",
-                "Output path relative to the workspace; the extension sets the format unless 'format' is given.",
+                "Output path relative to the workspace; the extension sets the format (.step/.stp, .iges/.igs, "
+                ".brep, .stl, .obj, .3mf, .dxf, .svg).",
                 required=True,
-            ),
-            Param(
-                "format",
-                "enum",
-                "Explicit format.",
-                choices=("step", "iges", "brep", "stl", "obj", "3mf", "dxf", "svg"),
             ),
             Param(
                 "view",
@@ -1054,22 +1060,11 @@ OPS: List[Op] = [
             TARGET,
             Param(
                 "material",
-                "enum",
-                "Material (E, Poisson, density, yield).",
-                required=True,
-                choices=(
-                    "steel_s235",
-                    "steel_s355",
-                    "stainless_304",
-                    "aluminium_6061_t6",
-                    "aluminium_5754",
-                    "titanium_gr5",
-                    "brass",
-                    "pla",
-                    "petg",
-                    "abs",
-                    "nylon_pa12",
-                ),
+                "string",
+                "Material grade with strength data (E, Poisson, density, yield): steel_s235, steel_s355, "
+                "stainless_304, aluminium_6061, aluminium_7075, aluminium_5754, titanium, brass, pla, petg, abs, "
+                "nylon_pa12. Default: the material assigned to the part with the 'material' op. Generic "
+                "materials (steel, aluminium) are refused: their yield strength depends on the grade.",
             ),
             Param("fixed", "selector", "Faces held fixed, e.g. '<X' (the bolted face).", required=True),
             Param(
@@ -1079,7 +1074,13 @@ OPS: List[Op] = [
                 'or {"faces": selector, "pressure": "0.5 MPa"} (pushes into planar faces).',
                 required=True,
             ),
-            Param("mesh_size", "number", "Element size in mm (default: about half the thinnest dimension).", gt=0),
+            Param(
+                "mesh_size",
+                "number",
+                "Element size in mm. Default: about the wall thickness (estimated as 2 x volume / area), which "
+                "suits deflection; give a smaller size for stresses near holes and corners (see convergence).",
+                gt=0,
+            ),
             Param(
                 "convergence",
                 "bool",
@@ -1196,7 +1197,7 @@ OPS_BY_NAME: Dict[str, Op] = {op.name: op for op in OPS}
 STEP_KEYS = ("op", "expect", "comment")
 
 # Request envelope keys.
-REQUEST_KEYS = ("doc", "new", "steps", "dry_run")
+REQUEST_KEYS = ("doc", "new", "steps", "dry_run", "brief")
 
 EXPECT_KEYS = ("volume", "bbox_size", "bbox_min", "bbox_max", "solids", "valid", "tolerance", "volume_tolerance")
 
@@ -1225,6 +1226,8 @@ def describe(names: Optional[List[str]] = None) -> Dict[str, Any]:
             "new": "true to start from an empty document, discarding the existing file's content.",
             "steps": "Ordered list of operations. All-or-nothing: on any error nothing is saved or exported.",
             "dry_run": "true to execute and report without saving or exporting anything.",
+            "brief": "true to leave volume and bounding box out of the per-step entries (long requests); "
+            "results, warnings and errors are reported as usual.",
         },
         "step_keys": {
             "op": "Operation name.",

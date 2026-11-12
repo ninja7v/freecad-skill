@@ -66,6 +66,54 @@ class LauncherTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(cp.stdout)["status"], "success", cp.stdout)
 
+    def test_imported_files_reach_freecad_from_a_hidden_workspace(self):
+        # Snap FreeCAD cannot read hidden folders under $HOME (where agent workspaces often live): the
+        # launcher stages the document and every file the request reads.
+        hidden = Path.home() / f".fcskill-test-{self.ws.name}"
+        hidden.mkdir()
+        try:
+            code, r = self.run_req(
+                {
+                    "doc": "src.FCStd",
+                    "steps": [
+                        {"op": "box", "name": "B", "length": 10, "width": 20, "height": 30},
+                        {"op": "export", "filename": "vendor/b.step"},
+                    ],
+                },
+                "a",
+                "--workspace",
+                str(hidden),
+            )
+            self.assertEqual(code, 0, r)
+            code, r = self.run_req(
+                {"doc": "use.FCStd", "steps": [{"op": "import", "file": "vendor/b.step", "name": "Imp"}]},
+                "b",
+                "--workspace",
+                str(hidden),
+            )
+            self.assertEqual(code, 0, r)
+            self.assertEqual(r["results"][0]["volume"], 6000.0)
+            self.assertTrue((hidden / "use.FCStd").is_file())
+        finally:
+            shutil.rmtree(hidden, ignore_errors=True)
+
+    def test_timeout_is_enforced_and_reported(self):
+        steps = [{"op": "box", "name": "B", "length": 300, "width": 300, "height": 5}] + [
+            {
+                "op": "grid_array",
+                "name": f"G{i}",
+                "target": "B",
+                "count_x": 60,
+                "count_y": 60,
+                "step_x": 400,
+                "step_y": 400,
+            }
+            for i in range(6)
+        ]
+        code, r = self.run_req({"doc": "slow.FCStd", "steps": steps}, "t", "--timeout", "0.5")
+        self.assertEqual((code, r["error"]["code"]), (2, "TIMEOUT"))
+        self.assertFalse((self.ws / "slow.FCStd").exists())
+
     def test_describe_unknown_op_is_usage_error(self):
         cp = subprocess.run([sys.executable, str(SK), "describe", "nope"], capture_output=True, text=True)
         self.assertEqual(cp.returncode, 2)

@@ -24,7 +24,8 @@ agent ◄──JSON── response file → stdout
 | `document.py` | Execution context: lookup, naming, expressions, recompute diagnostics, roles, save | yes |
 | `geometry.py` | Summaries, exact bounding boxes, topology descriptors, expectations | yes |
 | `ops/*.py` | One handler per op | yes |
-| `runner.py` | Request lifecycle, response format | yes |
+| `runner.py` | Request lifecycle, response format, final quality gate | yes |
+| `matdata.py` | The one material table (appearance, density, strength data) | no |
 
 ## Decisions
 
@@ -49,9 +50,15 @@ saved `.FCStd` is a real feature tree that a human can open and keep editing in 
 **Profiles from shapes, not constraints.** LLMs are unreliable at constraint-based sketching: they produce
 under- or over-constrained sketches and get the solver into odd states. Agents describe profiles as
 rectangles, circles, slots, rounded polygons and arc paths. `profiles.py` turns these into exact line and arc
-segments (pure Python, unit-tested), which become a native `Sketcher::SketchObject`. That sketch has
-coincident constraints only, so it stays editable in the GUI. Nested loops become holes through FreeCAD's
-Bullseye face maker.
+segments (pure Python, unit-tested), which become a native `Sketcher::SketchObject`. Nested loops become holes through FreeCAD's Bullseye face maker.
+
+Since 3.0 the agent still never writes constraints, but the engine does: a `rect`, `circle` or `slot` has
+exactly one number per degree of freedom, so the engine adds one named dimension per number (plus
+horizontal/vertical, tangent and equal-radius constraints) and the sketch is fully constrained (verified
+with `DoF == 0` in the tests). A number given as `"=expression"` becomes an expression on its dimension,
+which makes outlines follow `Params`. Polygons, splines and paths keep coincident constraints only: their
+corner points have no one-to-one dimensions an agent could name. If a dimensioned literal sketch does not
+solve, the engine falls back to the plain outline; with expressions it fails instead.
 
 **PartDesign through the same vocabulary.** There is no parallel set of PartDesign ops. `body` and `hole`
 are new; `extrude`, `revolve`, `fillet`, `chamfer`, `shell` and the arrays gain a body mode. Two findings
@@ -68,8 +75,29 @@ patterns are deactivated datum lines. `body.addObject` doesn't always advance th
 Tip is set explicitly.
 
 **Part workbench and PartDesign side by side.** Part features are robust headless and map one-to-one onto the
-operations. PartDesign (Body/Sketch/Pad/Pocket) with Sketcher constraints is the natural next step for
-sketch-based parts. It needs a sketch-geometry vocabulary designed carefully for LLMs.
+operations; PartDesign bodies use the same vocabulary for sketch-based parts.
+
+**Every backend is a separate process.** Until 2.x a Python that could import FreeCAD ran the engine
+in-process, with no timeout and no protection from a crash in the CAD kernel. Since 3.0 the launcher always
+starts a child process (FreeCADCmd, or the same Python), so `--timeout` and `FREECAD_CRASHED` apply everywhere.
+
+**Cost of validity checks.** `isValid()` took 6.6 of the 7.9 s that listing a 50-hole plate needed, so a
+document listing no longer checks it; each new shape is checked once when made, and the results of a
+request that changes something once at the end. Read-only requests skip both the check and the shape
+fingerprints.
+Booleans stacked on booleans are slow in FreeCAD itself (50 chained cuts: 21 s; the same holes in one cut:
+1.3 s), which the engine cannot fix: it warns (`DEEP_CHAIN`) and SKILL.md tells agents to batch.
+
+**A quality gate beyond isValid.** OCC calls a solid that passes through itself valid (a spring with a 6 mm
+wire on a 4 mm pitch). Results a request created or changed are therefore run through OCC's boolean-argument
+checker, solid by solid (separate solids of a compound may overlap on purpose), up to 3000 faces. A hit is
+a `SELF_INTERSECTION` warning, repeated in the export record; mesh exports test triangle intersections.
+
+**STEP through the structured writer.** `Part.export` writes anonymous shapes. `Import.export(objs, path,
+False, True)` writes named products and an assembly's product structure headless (the fourth argument keeps
+a single part's placement). The read-back comparison decides: if the structured file does not match the
+model, the plain writer is used and the response says so (`STEP_NAMES`). Colours are not written: FreeCAD
+keeps them in the GUI document.
 
 **Verification is part of every op.** "No exception" is not success:
 
@@ -152,10 +180,12 @@ or the host `/tmp`. The launcher copies the engine and, when needed, the documen
 
 ## Known limitations
 
-- Profiles: lines, arcs and circles; no splines or dimensional constraints.
+- Profiles: only rect, circle and slot are dimensioned; planes are XY/XZ/YZ with an offset.
+- Drawings: no section views, tolerances or PDF; hole positions are a table, not dimension lines.
+- STEP: no colours on export; an imported STEP becomes one fixed shape.
+- FEM: fixed supports, forces and planar pressures only; peak stress includes the clamped edges.
 - Placement values are literal; expressions apply to dimensions.
 - Selector re-evaluation happens only through the skill.
-- Colours and materials are unavailable headless.
 - FreeCAD 1.1 or newer is required, and checked at the start of every request. In 1.0.x, Draft (used for
   arrays, copy and scale) imports `FreeCADGui` at load time (`draftutils/params.py` →
   `init_draft_statusbar`), which fails headless where the GUI library can't load, e.g. conda on macOS and

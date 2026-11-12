@@ -72,6 +72,76 @@ def _signed_area(pts: Sequence[Point]) -> float:
     return 0.5 * sum(_cross(pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts)))
 
 
+# ------------------------------------------------------------------ expressions
+
+# Shapes whose numbers may be '=expression' strings: they are built with one named dimension per number,
+# which an expression can drive (see ops/sketch.py). Other shapes have no such one-to-one dimensions.
+EXPR_KINDS = ("rect", "circle", "slot")
+EXPR_HINT = (
+    "'=expression' values are supported in the numbers of rect, circle and slot shapes "
+    "(and their radius / corner_radius) of extrude and revolve profiles"
+)
+
+
+def is_expr(v: Any) -> bool:
+    return isinstance(v, str) and v.startswith("=") and len(v.strip()) > 1
+
+
+def _any_expr(v: Any) -> bool:
+    if isinstance(v, dict):
+        return any(_any_expr(x) for x in v.values())
+    if isinstance(v, list):
+        return any(_any_expr(x) for x in v)
+    return is_expr(v)
+
+
+def has_expressions(shapes: Any) -> bool:
+    return _any_expr(shapes)
+
+
+def resolve(shapes: Any, evaluate: Any) -> Any:
+    """Copy of ``shapes`` with the supported '=expression' numbers replaced by ``evaluate(expression)``."""
+
+    def val(v: Any) -> Any:
+        return evaluate(v) if is_expr(v) else v
+
+    out = []
+    for shape in shapes if isinstance(shapes, list) else []:
+        if not isinstance(shape, dict):
+            out.append(shape)
+            continue
+        new = dict(shape)
+        kind = next((k for k in EXPR_KINDS if k in shape), None)
+        if kind in ("rect", "circle") and isinstance(shape[kind], list):
+            new[kind] = [val(c) for c in shape[kind]]
+        elif kind == "slot" and isinstance(shape[kind], list):
+            new[kind] = [[val(c) for c in pt] if isinstance(pt, list) else pt for pt in shape[kind]]
+        if kind is not None:
+            for key in ("radius", "corner_radius"):
+                if key in new:
+                    new[key] = val(new[key])
+        out.append(new)
+    return out
+
+
+def check_expressions(shapes: Any) -> None:
+    """Static check of shapes that contain expressions: they may only stand where ``resolve`` replaces them.
+    Shapes without expressions get the full geometric check; the others get it when they are built."""
+    if not isinstance(shapes, list) or not shapes:
+        raise ProfileError("'shapes' must be a non-empty list")
+    placeholders = resolve(shapes, lambda e: 1.0)
+    for i, (shape, plain) in enumerate(zip(shapes, placeholders)):
+        if not _any_expr(shape):
+            shape_segments(shape, i)
+        elif _any_expr(plain):
+            raise ProfileError(f"shapes[{i}]: {EXPR_HINT}")
+        else:
+            kind = next(k for k in EXPR_KINDS if k in shape)
+            extra = set(shape) - {kind} - set(EXTRA_KEYS[kind])
+            if extra or sum(1 for k in KINDS if k in shape) != 1:
+                raise ProfileError(f"shapes[{i}]: unknown keys {sorted(extra)} for '{kind}'")
+
+
 # ------------------------------------------------------------------ splines
 
 
@@ -259,6 +329,8 @@ def _path(items: Any, label: str) -> List[Segment]:
 
 def shape_segments(shape: Any, index: int) -> List[Segment]:
     label = f"shapes[{index}]"
+    if _any_expr(shape):
+        raise ProfileError(f"{label}: {EXPR_HINT}")
     if not isinstance(shape, dict):
         raise ProfileError(f'{label} must be an object such as {{"rect": [0, 0, 40, 20]}}')
     kinds = [k for k in KINDS if k in shape]

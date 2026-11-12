@@ -18,6 +18,7 @@ from fcengine import (  # noqa: E402
     errors,
     guidata,
     library,
+    matdata,
     profiles,
     selectors,
     validate,
@@ -567,6 +568,76 @@ class LibraryTests(unittest.TestCase):
         ):
             with self.assertRaises(errors.SkillError, msg=bad):
                 library._check_url(bad)
+
+
+class V3PureTests(unittest.TestCase):
+    def test_expressions_only_where_a_dimension_can_carry_them(self):
+        ok = [
+            {"rect": [0, 0, "=Params.w", 30], "corner_radius": "=Params.r"},
+            {"circle": [5, "=Params.y"], "radius": 2},
+        ]
+        profiles.check_expressions(ok)
+        self.assertTrue(profiles.has_expressions(ok))
+        got = profiles.resolve(ok, lambda e: 7.0)
+        self.assertEqual(got[0], {"rect": [0, 0, 7.0, 30], "corner_radius": 7.0})
+        self.assertEqual(ok[0]["rect"][2], "=Params.w")  # the request is not modified
+        for bad in (
+            [{"polygon": [[0, 0], ["=a", 0], [1, 1]]}],
+            [{"path": [[0, 0], [5, 0], {"arc_to": [5, 5], "center": ["=a", 2.5]}]}],
+            [{"spline": [[0, 0], [5, "=a"], [1, 4]]}],
+            [{"rect": [0, 0, "=a", 3], "radius": 2}],
+        ):
+            with self.assertRaises(profiles.ProfileError):
+                profiles.check_expressions(bad)
+        # a literal shape next to a parametric one is still checked in full
+        with self.assertRaises(profiles.ProfileError):
+            profiles.check_expressions([{"circle": [0, 0], "radius": "=a"}, {"rect": [0, 0, -5, 3]}])
+        self.assertEqual(problems({"steps": [{"op": "extrude", "height": 1, "shapes": ok}]}), [])
+        self.assertTrue(
+            problems({"steps": [{"op": "loft", "sections": [{"shape": ok[1]}, {"shape": ok[1], "offset": 5}]}]})
+        )
+
+    def test_one_material_table(self):
+        names = matdata.structural_names()
+        self.assertIn("steel_s235", names)
+        self.assertNotIn("steel", names)  # generic: no single yield strength
+        self.assertEqual(matdata.canonical("Aluminium 6061-T6"), "aluminium_6061")
+        self.assertEqual(matdata.canonical("titanium_gr5"), "titanium")
+        self.assertIsNone(matdata.canonical("unobtainium"))
+        for target in matdata.ALIASES.values():
+            self.assertIn(target, matdata.PRESETS)
+        for name in names:
+            m = matdata.PRESETS[name]
+            self.assertTrue(500 < m.youngs_mpa < 500000 and 0 < m.poisson < 0.5 and 0 < m.yield_mpa < 3000, name)
+        # every grade the fem_static documentation names exists and has strength data
+        doc = catalog.OPS_BY_NAME["fem_static"].param("material").doc
+        for name in ("steel_s355", "stainless_304", "aluminium_7075", "aluminium_5754", "nylon_pa12", "petg"):
+            self.assertIn(name, doc)
+            self.assertIn(name, names)
+
+    def test_request_inputs_are_found_for_staging(self):
+        req = {
+            "steps": [
+                {"op": "import", "file": "vendor/motor.step"},
+                {"op": "import", "library": "Mechanical Parts/x"},
+                {"op": "text", "text": "A", "size": 5, "height": 1, "font": "fonts/a.ttf"},
+                {"op": "set", "target": "T", "properties": {"font": "fonts/b.ttf", "size": 3}},
+                {"op": "set", "target": "T", "properties": {"font": "default"}},
+                {"op": "box", "length": 1, "width": 1, "height": 1},
+            ]
+        }
+        self.assertEqual(workspace.request_inputs(req), ["vendor/motor.step", "fonts/a.ttf", "fonts/b.ttf"])
+        self.assertEqual(workspace.request_inputs({"op": "import", "file": "a.stl"}), ["a.stl"])
+        self.assertEqual(workspace.request_inputs("junk"), [])
+
+    def test_request_options_and_limits(self):
+        box = {"op": "box", "length": 1, "width": 1, "height": 1}
+        self.assertEqual(problems({"brief": True, "steps": [box]}), [])
+        self.assertTrue(problems({"brief": "yes", "steps": [box]}))
+        self.assertTrue(problems({"steps": [{"op": "linear_array", "target": "B", "count": 5000, "step": [1, 0, 0]}]}))
+        grid = {"op": "grid_array", "target": "B", "count_x": 100, "count_y": 100, "step_x": 1, "step_y": 1}
+        self.assertTrue(any("at most" in m["message"] for m in problems({"steps": [grid]})))
+        self.assertTrue(problems({"steps": [{"op": "export", "filename": "a.step", "format": "step"}]}))
 
 
 class V1FormatTests(unittest.TestCase):

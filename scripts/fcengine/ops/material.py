@@ -14,60 +14,13 @@ Probed on FreeCAD 1.1:
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .. import errors, geometry
+from .. import errors, geometry, matdata
 from ..document import APPEARANCE_PROP, Context
 from ..errors import SkillError
 
-# preset -> (library material or None, default colour or None (use the library's look), fallback density g/cm3)
-PRESETS: Dict[str, Tuple[Optional[str], Optional[List[float]], Optional[float]]] = {
-    "steel": ("Steel-Generic", None, 7.85),
-    "stainless_steel": ("AusteniticStainlessSteel", [0.72, 0.73, 0.75], 8.0),
-    "cast_iron": ("GrayCastIron", [0.30, 0.30, 0.31], 7.2),
-    "aluminium": ("Aluminum-Generic", [0.78, 0.79, 0.81], 2.7),
-    "aluminium_6061": ("Aluminum-6061-T6", [0.78, 0.79, 0.81], 2.7),
-    "aluminium_7075": ("Aluminum-7075-T6", [0.78, 0.79, 0.81], 2.81),
-    "titanium": ("Ti-6Al-4V", [0.55, 0.55, 0.58], 4.43),
-    "copper": ("Copper-Generic", None, 8.96),
-    "brass": ("Brass", None, 8.5),
-    "bronze": ("Bronze", None, 8.8),
-    "gold": ("Gold", None, 19.3),
-    "silver": ("Silver", None, 10.5),
-    "chrome": ("Chrome", None, None),
-    "pla": ("PLA-Generic", [0.92, 0.92, 0.90], 1.24),
-    "abs": ("ABS-Generic", [0.18, 0.18, 0.19], 1.06),
-    "petg": ("PET-Generic", [0.80, 0.88, 0.93], 1.27),
-    "nylon": ("PA6-Generic", [0.93, 0.92, 0.87], 1.15),
-    "pom": ("POM-Copolymer-Generic", [0.95, 0.95, 0.93], 1.41),
-    "polypropylene": ("PP-Generic", [0.90, 0.90, 0.88], 0.92),
-    "polycarbonate": ("PC-Molded", [0.85, 0.90, 0.95], 1.2),
-    "acrylic": ("PMMA-Generic", [0.85, 0.93, 0.97], 1.17),
-    "ptfe": ("PTFE-Generic", [0.97, 0.97, 0.96], 2.07),
-    "pvc": ("PVC-Generic", [0.75, 0.76, 0.78], 1.38),
-    "rubber": (None, [0.07, 0.07, 0.07], 1.15),
-    "glass": ("Glass-Generic", [0.80, 0.90, 0.95], 2.52),
-    "wood": ("Wood-Generic", None, 0.7),
-    "concrete": ("Concrete-Generic", None, 2.4),
-    "default": ("Default", None, None),
-}
-PRESET_TRANSPARENCY = {"glass": 70, "acrylic": 60}
-ALIASES = {
-    "aluminum": "aluminium",
-    "aluminum_6061": "aluminium_6061",
-    "aluminum_7075": "aluminium_7075",
-    "stainless": "stainless_steel",
-    "inox": "stainless_steel",
-    "plastic": "abs",
-    "pa": "nylon",
-    "pa6": "nylon",
-    "pet": "petg",
-    "pp": "polypropylene",
-    "pc": "polycarbonate",
-    "pmma": "acrylic",
-    "plexiglass": "acrylic",
-    "wood_oak": "wood",
-}
+PRESETS = matdata.PRESETS  # one table for materials, masses and stress analysis (see matdata)
 
 
 def _library() -> Dict[str, Any]:
@@ -111,18 +64,17 @@ def _color(value: Any) -> List[float]:
 
 
 def resolve(name: str, lib: Dict[str, Any]) -> Dict[str, Any]:
-    key = name.strip().lower().replace(" ", "_").replace("-", "_")
-    key = ALIASES.get(key, key)
-    if key in PRESETS:
-        libname, color, density = PRESETS[key]
-        mat = lib.get(libname.lower()) if libname else None
+    key = matdata.canonical(name)
+    if key is not None:
+        preset = PRESETS[key]
+        mat = lib.get(preset.library.lower()) if preset.library else None
         return {
             "material": key,
             "library": mat.Name if mat is not None else None,
             "object": mat,
-            "color": color,
-            "transparency": PRESET_TRANSPARENCY.get(key, 0),
-            "density": (_density(mat) if mat is not None else None) or density,
+            "color": preset.color,
+            "transparency": matdata.TRANSPARENCY.get(key, 0),
+            "density": preset.density or (_density(mat) if mat is not None else None),
         }
     mat = lib.get(name.strip().lower())
     if mat is None:

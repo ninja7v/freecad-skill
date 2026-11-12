@@ -107,6 +107,10 @@ def assembly(ctx: Context, p: Dict[str, Any]) -> Any:
             )
             link.setEditorMode(START_PROP, 2)
             setattr(link, START_PROP, link.Placement)
+        else:
+            # A link has its own placement, which replaces the object's: without this a part modelled at
+            # x = 100 would jump to the origin when added (often straight into another part).
+            link.Placement = src.Placement
         links.append(link)
     grounded = [link for link, spec in zip(links, p["parts"]) if spec.get("ground")] or links[:1]
     for link in grounded:
@@ -119,8 +123,33 @@ def assembly(ctx: Context, p: Dict[str, Any]) -> Any:
             "parts": [link.Name for link in links],
             "grounded": [link.Name for link in grounded],
             "interferences": interferences(asm),
+            "bom": bom(asm),
         },
     }
+
+
+def bom(asm: Any) -> List[Dict[str, Any]]:
+    """Bill of materials: one line per distinct part, with its quantity, material and mass when known."""
+    from .material import APPEARANCE_PROP, density_of
+
+    lines: Dict[str, Dict[str, Any]] = {}
+    for link in parts_of(asm):
+        src = link.LinkedObject
+        if src is None:
+            continue
+        line = lines.get(src.Name)
+        if line is None:
+            line = lines[src.Name] = {"item": len(lines) + 1, "part": src.Label, "quantity": 0, "instances": []}
+            raw = getattr(src, APPEARANCE_PROP, "") if APPEARANCE_PROP in src.PropertiesList else ""
+            name = json.loads(raw).get("material") if raw else None
+            if name:
+                line["material"] = name
+            rho = density_of(src)
+            if rho and not src.Shape.isNull():
+                line["mass_g_each"] = geometry.num(src.Shape.Volume / 1000.0 * rho, 2)
+        line["quantity"] += 1
+        line["instances"].append(link.Name)
+    return list(lines.values())
 
 
 # ------------------------------------------------------------------ joints
