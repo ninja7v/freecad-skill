@@ -1,8 +1,8 @@
-# FreeCAD skill for OpenClaw
+# FreeCAD skill for AI agents
 
-This skill lets an AI agent create, edit, inspect and export real, **parametric** FreeCAD models. It sends
-structured JSON and gets verified geometry back. You can open the result in FreeCAD and keep working on it:
-each step is a native feature (`Part::Box`, `Part::Cut`, `Part::Fillet`, Draft arrays, spreadsheet
+This skill lets an AI agent (OpenClaw, Claude Code, Cursor, Codex and others) create, edit, inspect and
+export real, **parametric** FreeCAD models. It sends structured JSON and gets verified geometry back. You can
+open the result in FreeCAD and keep working on it: each step is a native feature (`Part::Box`, `Part::Cut`, `Part::Fillet`, Draft arrays, spreadsheet
 parameters), so you don't get a dead lump of geometry.
 
 ```text
@@ -63,13 +63,27 @@ export FCSKILL_FREECAD=/Applications/FreeCAD.app/Contents/Resources/bin/freecadc
 
 ### 2. The skill
 
+Pick the line for your agent:
+
 ```bash
-clawhub install freecad-skill
-# or
+clawhub install freecad-skill                        # OpenClaw, from ClawHub
+npx skills add ninja7v/freecad-skill                 # skills.sh: Claude Code, Cursor, Codex and others
+```
+
+```text
+/plugin marketplace add ninja7v/freecad-skill        # Claude Code plugin
+/plugin install freecad-skill@freecad-skill
+```
+
+Or clone the repository into your agent's skills folder, for example:
+
+```bash
 git clone https://github.com/ninja7v/freecad-skill.git ~/.openclaw/skills/freecad-skill
 ```
 
 ### 3. Check
+
+Run `doctor` from wherever the skill was installed, for example:
 
 ```bash
 python3 ~/.openclaw/skills/freecad-skill/scripts/fcskill.py doctor
@@ -82,8 +96,8 @@ python3 ~/.openclaw/skills/freecad-skill/scripts/fcskill.py doctor
 >
 > **Windows:** use `python` (or `py`) instead of `python3` in the commands below.
 >
-> **Sandboxed agents (Docker):** FreeCAD must be installed *inside* the sandbox image, because OpenClaw
-> checks and runs binaries in the container. Snap packages don't work in containers; use the distribution
+> **Sandboxed agents (Docker):** FreeCAD must be installed *inside* the sandbox image, because the
+> agent checks and runs binaries in the container. Snap packages don't work in containers; use the distribution
 > package, conda (`conda install -c conda-forge freecad`) or an extracted AppImage with `FCSKILL_FREECAD`.
 
 ## Use
@@ -238,6 +252,24 @@ clawhub scan --slug freecad-skill                      # read the security repor
   `clawhub inspect @ninja7v/freecad-skill`.
 - The ClawHub GitHub importer skips private repositories, so publish with the CLI.
 - `.clawhubignore` keeps `tests/` out of the published bundle.
+
+The root `SKILL.md` is also what [skills.sh](https://www.skills.sh/) and Claude Code plugins install, straight
+from this repository, so nothing is uploaded for them:
+
+```bash
+claude plugin validate .                               # .claude-plugin/marketplace.json
+DISABLE_TELEMETRY=1 npx skills add . --list            # skills.sh finds exactly one skill
+git tag v3.0.1 && git push origin main v3.0.1
+```
+
+- The version lives in `scripts/fcengine/__init__.py`, `SKILL.md`, `skill.json`,
+  `.claude-plugin/marketplace.json` and `CHANGELOG.md`; a test fails when they disagree. Claude Code only
+  updates installed plugins when the version in `marketplace.json` changes.
+- Do not add a `.claude-plugin/plugin.json`: `clawhub skill publish` then refuses the folder as a plugin.
+  The marketplace entry carries the plugin's metadata instead.
+- skills.sh installs whatever is on `main`, so keep unreleased work on a branch.
+- [ClaudePluginHub](https://www.claudepluginhub.com/) indexes the repository from `.claude-plugin/`; submit
+  the URL once at `/tools/submit-plugin`. skills.sh lists the skill after its first `npx skills add`.
 
 ## License
 

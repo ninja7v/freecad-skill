@@ -790,6 +790,32 @@ class DocsTests(unittest.TestCase):
             used |= set(re.findall(r"\b(FCSKILL_[A-Z_]+|FREECAD_PATH)\b", f.read_text(encoding="utf-8")))
         self.assertEqual(sorted(used - declared), [], "env vars used in code but not declared in SKILL.md")
 
+    def test_published_metadata_agrees(self):
+        """SKILL.md (ClawHub, skills.sh), skill.json and the Claude plugin entry describe one release."""
+        import json
+        import re
+
+        import fcengine
+
+        version = fcengine.__version__
+        skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        legacy = json.loads((ROOT / "skill.json").read_text(encoding="utf-8"))
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        (plugin,) = market["plugins"]
+
+        self.assertEqual(re.search(r"^version: (\S+)$", skill, re.M).group(1), version)
+        self.assertEqual(plugin["version"], version)
+        self.assertEqual(legacy["version"], version)
+        self.assertEqual(re.search(r"^## (\S+)", changelog, re.M).group(1), version)
+
+        self.assertEqual(re.search(r'^description: "(.*)"$', skill, re.M).group(1), plugin["description"])
+        self.assertEqual(plugin["name"], "freecad-skill")
+        self.assertEqual(plugin["source"], "./")  # the plugin is the repository root, with SKILL.md in it
+        # The marketplace entry is the whole plugin manifest: `clawhub skill publish` refuses a folder
+        # that has a .claude-plugin/plugin.json ("This looks like a plugin").
+        self.assertFalse((ROOT / ".claude-plugin" / "plugin.json").exists())
+
     def test_skill_md_lists_every_op(self):
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         missing = [op.name for op in catalog.OPS if f"`{op.name}`" not in skill]

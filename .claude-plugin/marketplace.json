@@ -1,0 +1,24 @@
+{
+  "name": "freecad-skill",
+  "description": "FreeCAD skill: parametric CAD models from JSON.",
+  "owner": {
+    "name": "ninja7v",
+    "url": "https://github.com/ninja7v"
+  },
+  "plugins": [
+    {
+      "name": "freecad-skill",
+      "source": "./",
+      "version": "3.0.1",
+      "description": "Create, edit, verify and export parametric FreeCAD models (STEP, STL, 3MF) and DXF drawings from JSON; STL import; mass and stress checks; parts from GitHub.",
+      "author": {
+        "name": "ninja7v",
+        "url": "https://github.com/ninja7v"
+      },
+      "homepage": "https://github.com/ninja7v/freecad-skill",
+      "repository": "https://github.com/ninja7v/freecad-skill",
+      "license": "MIT-0",
+      "keywords": ["freecad", "cad", "3d-printing", "step", "parametric"]
+    }
+  ]
+}
